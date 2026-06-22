@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import JsBarcode from "jsbarcode";
 import {
-  ArrowRight,
   Barcode,
   Check,
   CheckCircle2,
   ChevronDown,
-  CircleHelp,
   Copy,
   Eye,
   File,
@@ -22,7 +20,6 @@ import {
   Send,
   Settings2,
   Sparkles,
-  Tag,
   Trash2,
   UploadCloud,
   X,
@@ -39,6 +36,7 @@ import {
   type SizeCode,
 } from "../../types/product";
 import {
+  generateDescriptions,
   imageFilename,
   makeProductSheet,
   roleForImageNumber,
@@ -62,7 +60,6 @@ import {
   checkOllamaStatus,
   extractProductFieldsFromNaturalInput,
   generateProductDescription,
-  RECOMMENDED_OLLAMA_MODELS,
   suggestProductField,
 } from "../../services/ollamaService";
 import type { AppView } from "../../app/App";
@@ -139,10 +136,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     addImage,
     patchImage,
     removeImage,
-    regenerateDescriptions,
     addMessage,
     setTone,
-    setSettings,
     setFolderPath,
   } = useProductStore();
 
@@ -157,7 +152,6 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [knownModelCodes, setKnownModelCodes] = useState<string[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(true);
-  const [tagDraft, setTagDraft] = useState("");
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [whisperReady, setWhisperReady] = useState(false);
@@ -239,8 +233,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   };
 
   const addProductImage = async (file: File) => {
-    const imageNumber = draft.images.length + 1;
-    const colorCode = draft.colors[0] ?? "NEG";
+    const currentDraft = useProductStore.getState().draft;
+    const imageNumber = currentDraft.images.length + 1;
+    const colorCode = currentDraft.colors[0] ?? "NEG";
     const image: ProductImage = {
       id: uid("image"),
       colorCode,
@@ -255,7 +250,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     addImage(image);
     if (isTauri()) {
       try {
-        const paths = await persistProductImage(draft.modelCode, file.name, image.finalFilename, file);
+        const paths = await persistProductImage(
+          currentDraft.modelCode,
+          file.name,
+          image.finalFilename,
+          file,
+        );
         patchImage(image.id, paths);
       } catch {
         notify(`No pude guardar ${file.name}`);
@@ -271,7 +271,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       reader.readAsDataURL(file);
     });
 
-  const handleAttachments = async (files: FileList | null, addToGallery = true) => {
+  const handleChatAttachments = async (files: FileList | null) => {
     if (!files?.length) return;
     const next: ChatAttachment[] = [];
     for (const file of Array.from(files)) {
@@ -285,13 +285,42 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         const dataUrl = await fileAsDataUrl(file);
         attachment.previewUrl = dataUrl;
         attachment.imageBase64 = dataUrl.split(",")[1];
-        if (addToGallery) await addProductImage(file);
       } else if (file.type.startsWith("text/") || file.name.toLowerCase().endsWith(".txt")) {
         attachment.text = await file.text();
       }
       next.push(attachment);
     }
     setAttachments((current) => [...current, ...next]);
+  };
+
+  const handleGalleryImages = async (files: FileList | null) => {
+    if (!files?.length) return;
+    for (const file of Array.from(files)) {
+      if (file.type.startsWith("image/")) await addProductImage(file);
+    }
+  };
+
+  const toneFromInstruction = (instruction: string) => {
+    const normalized = instruction.toLowerCase();
+    if (/(minimal|simple|breve|corta|directa)/.test(normalized)) return "minimal" as const;
+    if (/(comercial|vendedora|venta|atractiva)/.test(normalized)) return "comercial" as const;
+    if (/(rockera|rock|fuerte|cruda|rebelde)/.test(normalized)) return "rockera" as const;
+    return selectedTone;
+  };
+
+  const createDescriptionTexts = async (
+    sourceDraft: ProductDraft,
+    tone: "rockera" | "comercial" | "minimal",
+    instruction = "",
+  ) => {
+    if (ollamaConnected && settings.ollamaModel) {
+      try {
+        return await generateProductDescription(sourceDraft, settings, tone, instruction);
+      } catch {
+        // El generador local mantiene disponible el flujo si Ollama deja de responder.
+      }
+    }
+    return generateDescriptions(sourceDraft, tone);
   };
 
   const sendMessage = async () => {
@@ -320,6 +349,11 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         images,
       );
       applyExtractedBrief(result.data);
+      const nextDraft = useProductStore.getState().draft;
+      const requestedTone = toneFromInstruction(clean);
+      const generatedTexts = await createDescriptionTexts(nextDraft, requestedTone, clean);
+      setTone(requestedTone);
+      patchDraft(generatedTexts);
       const found = [
         result.data.garmentType && GARMENT_TYPES[result.data.garmentType],
         result.data.colors?.length && `color ${result.data.colors.join(", ")}`,
@@ -330,8 +364,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       addMessage({
         role: "assistant",
         content: found.length
-          ? `Perfecto. Detecté ${found.join(", ")} y actualicé la ficha. Revisá los datos de la derecha; abajo te marco lo que todavía falta.`
-          : "Revisé el mensaje y los adjuntos. No completé datos dudosos: decime qué prenda es, sus colores, talles o precio y seguimos.",
+          ? `Perfecto. Detecté ${found.join(", ")}, actualicé la ficha y generé las descripciones. Podés pedirme cambios por este chat o editarlas a la derecha.`
+          : "Actualicé las descripciones siguiendo tu indicación. Si querés otro enfoque, decime por ejemplo “más corta”, “más comercial” o “más rockera”.",
       });
       setAttachments([]);
     } catch {
@@ -451,23 +485,23 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     setActionBusy("description");
     setTone(tone);
     try {
-      if (ollamaConnected && settings.ollamaModel) {
-        const result = await generateProductDescription(draft, settings, tone);
-        patchDraft(result);
-        notify("Descripción generada con IA");
-      } else {
-        regenerateDescriptions(tone);
-        notify("Descripción generada localmente");
-      }
-    } catch {
-      regenerateDescriptions(tone);
-      notify("Descripción generada localmente");
+      const result = await createDescriptionTexts(
+        draft,
+        tone,
+        "Regenerá los textos con una versión diferente de la actual.",
+      );
+      patchDraft(result);
+      notify(ollamaConnected ? "Descripciones regeneradas con IA" : "Descripciones regeneradas");
     } finally {
       setActionBusy(null);
     }
   };
 
   const suggestField = async (field: keyof ProductDraft) => {
+    if (field === "shortDescription" || field === "longDescription" || field === "whatsappText") {
+      await handleDescriptionGeneration();
+      return;
+    }
     setFieldBusy(field);
     try {
       const value = await suggestProductField(field, draft, settings);
@@ -540,12 +574,6 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         : [...draft.sizes, size],
     );
 
-  const addTag = () => {
-    const clean = tagDraft.trim().toLowerCase();
-    if (clean && !draft.tags.includes(clean)) patchDraft({ tags: [...draft.tags, clean] });
-    setTagDraft("");
-  };
-
   return (
     <div className="product-creator">
       {toast && (
@@ -556,27 +584,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       )}
 
       <header className="creator-header">
-        <div>
-          <span className="creator-kicker">
-            <Sparkles size={14} /> Asistente de producto
-          </span>
-          <h1>Crear producto</h1>
-          <p>Contale la idea a la IA. La ficha se completa mientras conversan.</p>
-        </div>
-        <div className="creator-header__actions">
-          <StatusDot status={ollamaConnected ? "success" : "warning"}>
-            {ollamaConnected ? settings.ollamaModel : "Asistente local"}
-          </StatusDot>
-          <Button onClick={() => setPreviewOpen(true)}>
-            <Eye size={16} /> Vista previa
-          </Button>
-          <Button onClick={() => onNavigate("settings")}>
-            <Settings2 size={16} /> Ajustes
-          </Button>
-          <Button variant="primary" loading={actionBusy === "save"} onClick={handleSave}>
-            <Save size={16} /> Guardar
-          </Button>
-        </div>
+        <h1>Crear producto</h1>
+        <p>Conversá a la izquierda y revisá la ficha a la derecha.</p>
       </header>
 
       <div className="creator-layout">
@@ -586,27 +595,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               <div>
                 <span className="live-orb" />
                 <strong>Asistente ROXWANA</strong>
-                <small>
-                  {assistantBusy
-                    ? "Analizando producto..."
-                    : whisperReady
-                      ? "IA y Whisper listos"
-                      : "Preparando Whisper..."}
-                </small>
               </div>
-              <label className="model-select">
-                <select
-                  value={settings.ollamaModel}
-                  onChange={(event) => setSettings({ ollamaModel: event.target.value })}
-                >
-                  {RECOMMENDED_OLLAMA_MODELS.map((model) => (
-                    <option value={model.name} key={model.name}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown size={14} />
-              </label>
             </div>
 
             <div className="creator-chat" ref={chatBox}>
@@ -727,7 +716,10 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 multiple
                 type="file"
                 accept="image/*,.txt,.pdf,.doc,.docx"
-                onChange={(event) => void handleAttachments(event.target.files)}
+                onChange={(event) => {
+                  void handleChatAttachments(event.target.files);
+                  event.currentTarget.value = "";
+                }}
               />
               <small className="composer-hint">
                 Enter para enviar · Shift + Enter para nueva línea · la IA puede cometer errores
@@ -748,7 +740,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 <UploadCloud size={15} /> Agregar imágenes
               </button>
             </div>
-            <div className="product-gallery">
+            <div className={`product-gallery ${mainImage ? "" : "is-empty"}`}>
               <button
                 type="button"
                 className="gallery-main"
@@ -765,28 +757,29 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 )}
                 {mainImage && <em>01 · Portada</em>}
               </button>
-              <div className="gallery-thumbs">
-                {draft.images
-                  .filter((image) => image.id !== mainImage?.id)
-                  .slice(0, 4)
-                  .map((image) => (
-                    <article key={image.id}>
-                      {image.previewUrl ? <img src={image.previewUrl} alt={image.role} /> : null}
-                      <span>{String(image.imageNumber).padStart(2, "0")}</span>
-                      <button type="button" onClick={() => removeImage(image.id)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </article>
-                  ))}
-                <button
-                  type="button"
-                  className="gallery-add"
-                  onClick={() => galleryInput.current?.click()}
-                >
-                  <Plus size={22} />
-                  <span>Agregar</span>
-                </button>
-              </div>
+              {mainImage && (
+                <div className="gallery-thumbs">
+                  {draft.images
+                    .filter((image) => image.id !== mainImage.id)
+                    .map((image) => (
+                      <article key={image.id}>
+                        {image.previewUrl ? <img src={image.previewUrl} alt={image.role} /> : null}
+                        <span>{String(image.imageNumber).padStart(2, "0")}</span>
+                        <button type="button" onClick={() => removeImage(image.id)}>
+                          <Trash2 size={13} />
+                        </button>
+                      </article>
+                    ))}
+                  <button
+                    type="button"
+                    className="gallery-add"
+                    onClick={() => galleryInput.current?.click()}
+                  >
+                    <Plus size={20} />
+                    <span>Agregar</span>
+                  </button>
+                </div>
+              )}
             </div>
             <input
               ref={galleryInput}
@@ -794,7 +787,10 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               multiple
               type="file"
               accept="image/*"
-              onChange={(event) => void handleAttachments(event.target.files)}
+              onChange={(event) => {
+                void handleGalleryImages(event.target.files);
+                event.currentTarget.value = "";
+              }}
             />
           </section>
         </div>
@@ -947,6 +943,32 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 />
               </FieldShell>
 
+              <div className="description-tools">
+                <div>
+                  {(["rockera", "comercial", "minimal"] as const).map((tone) => (
+                    <button
+                      type="button"
+                      key={tone}
+                      className={selectedTone === tone ? "active" : ""}
+                      onClick={() => handleDescriptionGeneration(tone)}
+                    >
+                      {tone}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleDescriptionGeneration()}
+                  disabled={actionBusy === "description"}
+                >
+                  <RefreshCw size={14} className={actionBusy === "description" ? "spin" : ""} />
+                  Regenerar descripciones
+                </button>
+                <button type="button" onClick={() => setPreviewOpen(true)}>
+                  <Eye size={14} /> Vista previa
+                </button>
+              </div>
+
               <button
                 type="button"
                 className="details-toggle"
@@ -968,94 +990,10 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                       onChange={(event) => patchDraft({ longDescription: event.target.value })}
                     />
                   </FieldShell>
-                  <div className="description-tools">
-                    <div>
-                      {(["rockera", "comercial", "minimal"] as const).map((tone) => (
-                        <button
-                          type="button"
-                          key={tone}
-                          className={selectedTone === tone ? "active" : ""}
-                          onClick={() => handleDescriptionGeneration(tone)}
-                        >
-                          {tone}
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDescriptionGeneration()}
-                      disabled={actionBusy === "description"}
-                    >
-                      <RefreshCw size={14} className={actionBusy === "description" ? "spin" : ""} />
-                      Generar textos
-                    </button>
-                    <button type="button" onClick={() => setPreviewOpen(true)}>
-                      <Eye size={14} /> Vista previa
-                    </button>
-                  </div>
                 </div>
               )}
             </div>
           </section>
-
-          <section className="creator-card tags-card">
-            <div className="mini-title">
-              <Tag size={16} />
-              <strong>Etiquetas</strong>
-            </div>
-            <div className="tag-list">
-              {draft.tags.map((tag) => (
-                <span key={tag}>
-                  {tag}
-                  <button
-                    type="button"
-                    onClick={() => patchDraft({ tags: draft.tags.filter((item) => item !== tag) })}
-                  >
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-              <div className="tag-add">
-                <input
-                  value={tagDraft}
-                  placeholder="Nueva etiqueta"
-                  onChange={(event) => setTagDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addTag();
-                    }
-                  }}
-                />
-                <button type="button" onClick={addTag}>
-                  <Plus size={14} />
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {pending.length > 0 && (
-            <section className="creator-card pending-card">
-              <div className="mini-title">
-                <CircleHelp size={16} />
-                <strong>La IA necesita saber</strong>
-                <span>{pending.length}</span>
-              </div>
-              {pending.slice(0, 3).map((question) => (
-                <button
-                  type="button"
-                  key={question.field}
-                  onClick={() => {
-                    setMessage(question.question);
-                    document.querySelector<HTMLTextAreaElement>(".creator-composer textarea")?.focus();
-                  }}
-                >
-                  <span>{question.question}</span>
-                  <ArrowRight size={14} />
-                </button>
-              ))}
-            </section>
-          )}
 
           <section className="creator-card barcode-card">
             <div className="section-title">
@@ -1105,34 +1043,37 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               ))}
             </div>
           </section>
+
+          <section className="creator-card creator-actions">
+            <span>
+              {folderPath ? (
+                <>
+                  <CheckCircle2 size={15} /> Carpeta lista
+                </>
+              ) : (
+                "Acciones del producto"
+              )}
+            </span>
+            <div>
+              <Button onClick={() => onNavigate("settings")}>
+                <Settings2 size={16} /> Ajustes
+              </Button>
+              <Button loading={actionBusy === "folder"} onClick={handleCreateFolder}>
+                <FolderPlus size={16} /> Crear carpeta
+              </Button>
+              <Button onClick={() => setPreviewOpen(true)}>
+                <Eye size={16} /> Vista previa
+              </Button>
+              <Button loading={actionBusy === "export"} onClick={handleExport}>
+                <FileOutput size={16} /> Exportar ficha
+              </Button>
+              <Button variant="primary" loading={actionBusy === "save"} onClick={handleSave}>
+                <Save size={16} /> Guardar producto
+              </Button>
+            </div>
+          </section>
         </aside>
       </div>
-
-      <footer className="creator-actions">
-        <span>
-          {folderPath ? (
-            <>
-              <CheckCircle2 size={15} /> Carpeta lista
-            </>
-          ) : (
-            "Guardá el producto cuando termines de revisarlo."
-          )}
-        </span>
-        <div>
-          <Button loading={actionBusy === "folder"} onClick={handleCreateFolder}>
-            <FolderPlus size={16} /> Crear carpeta
-          </Button>
-          <Button onClick={() => setPreviewOpen(true)}>
-            <Eye size={16} /> Vista previa
-          </Button>
-          <Button loading={actionBusy === "export"} onClick={handleExport}>
-            <FileOutput size={16} /> Exportar ficha
-          </Button>
-          <Button variant="primary" loading={actionBusy === "save"} onClick={handleSave}>
-            <Save size={16} /> Guardar producto
-          </Button>
-        </div>
-      </footer>
 
       {previewOpen && (
         <div className="preview-backdrop" onMouseDown={() => setPreviewOpen(false)}>

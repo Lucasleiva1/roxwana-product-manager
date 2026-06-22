@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  generateDescriptions,
   generateVariants,
   makeModelCode,
   makeProductSheet,
@@ -31,6 +32,14 @@ describe("lógica de producto ROXWANA", () => {
   it("exporta las columnas de variante en orden SKU | TALLE | COLOR | STOCK", () => {
     const sheet = makeProductSheet(makeEmptyDraft());
     expect(sheet).toContain("RXW-REM-SRK004-NEG-M | M | NEG | 2");
+  });
+
+  it("regenera una versión local diferente de la descripción", () => {
+    const draft = makeEmptyDraft();
+    const first = generateDescriptions(draft, "rockera");
+    const second = generateDescriptions({ ...draft, ...first }, "rockera");
+    expect(second.shortDescription).not.toBe(first.shortDescription);
+    expect(second.longDescription).not.toBe(first.longDescription);
   });
 
   it("bloquea modelos y SKU ya registrados", () => {

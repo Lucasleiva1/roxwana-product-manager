@@ -118,9 +118,11 @@ export async function generateProductDescription(
   draft: ProductDraft,
   settings: AppSettings,
   tone: string,
+  instruction = "",
 ) {
   const prompt = `${settings.assistantInstructions}
 Redactá para ROXWANA en español rioplatense. Tono: ${tone}.
+${instruction ? `Pedido actual del usuario: ${instruction}` : "Generá una nueva versión de los textos."}
 No inventes materiales ni prestaciones. Devolvé SOLO JSON:
 {"shortDescription":"...","longDescription":"...","whatsappText":"...","tags":["..."]}
 Datos: ${JSON.stringify({
@@ -130,6 +132,9 @@ Datos: ${JSON.stringify({
     technique: draft.technique,
     material: draft.material,
     tags: draft.tags,
+    currentShortDescription: draft.shortDescription,
+    currentLongDescription: draft.longDescription,
+    currentWhatsappText: draft.whatsappText,
   })}`;
   return ollamaJson<{
     shortDescription: string;

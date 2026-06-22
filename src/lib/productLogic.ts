@@ -268,21 +268,34 @@ export function generateDescriptions(draft: ProductDraft, tone: "rockera" | "com
   const material = draft.material && draft.material !== "No definido" ? ` en ${draft.material}` : "";
   const technique = draft.technique !== "No definido" ? ` con terminación ${draft.technique}` : "";
   const style = draft.tags.includes("oversize") ? "de calce oversize" : "de identidad urbana";
-  const shortDescription =
+  const primaryShortDescription =
     tone === "minimal"
       ? `${GARMENT_TYPES[draft.garmentType]} ${colorNames} ${style}${technique}.`
       : `${GARMENT_TYPES[draft.garmentType]} ${colorNames} ${style}${technique}, creada para llevar el pulso ROXWANA.`;
-  const longDescription =
+  const alternateShortDescription =
+    tone === "minimal"
+      ? `${draft.name}: ${garment} ${colorNames}${material}, ${style}.`
+      : `${draft.name} combina actitud rockera, ${style} y una presencia pensada para destacar.`;
+  const primaryLongDescription =
     tone === "comercial"
       ? `${draft.name} es una ${garment}${material} pensada para acompañarte todos los días. Su estética rock urbana, su calce cómodo y sus terminaciones cuidadas la convierten en una pieza fácil de combinar y difícil de ignorar.`
       : tone === "minimal"
         ? `${draft.name}. ${GARMENT_TYPES[draft.garmentType]}${material}, ${style}${technique}. Diseño ROXWANA de presencia limpia y carácter urbano.`
         : `${draft.name} nace del lado más crudo de ROXWANA. Una ${garment}${material} ${style}${technique}, con una presencia que no pide permiso. Hecha para looks urbanos, noches largas y volumen alto.`;
+  const alternateLongDescription =
+    tone === "comercial"
+      ? `${draft.name} lleva la identidad ROXWANA a una ${garment}${material} versátil y cómoda. Su diseño urbano${technique} funciona como protagonista del look y se adapta con facilidad a distintas combinaciones.`
+      : tone === "minimal"
+        ? `${draft.name} reúne una silueta ${style}${material}${technique}. Una pieza urbana, directa y fiel al lenguaje visual de ROXWANA.`
+        : `${draft.name} cruza calle, volumen y actitud en una ${garment}${material} ${style}${technique}. Una pieza ROXWANA para vestirse con carácter y dejar que el diseño hable primero.`;
+  const useAlternate = draft.shortDescription === primaryShortDescription;
 
   return {
-    shortDescription,
-    longDescription,
-    whatsappText: `Quiero consultar por ${draft.name}. ¿Me pasan disponibilidad de talles y colores?`,
+    shortDescription: useAlternate ? alternateShortDescription : primaryShortDescription,
+    longDescription: useAlternate ? alternateLongDescription : primaryLongDescription,
+    whatsappText: useAlternate
+      ? `Hola, quiero saber qué talles y colores tienen disponibles de ${draft.name}.`
+      : `Quiero consultar por ${draft.name}. ¿Me pasan disponibilidad de talles y colores?`,
   };
 }
 

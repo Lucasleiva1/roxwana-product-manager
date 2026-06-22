@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Archive,
   Barcode,
-  Bell,
   Boxes,
   ChevronDown,
   FileOutput,
@@ -12,9 +11,10 @@ import {
   Image,
   Menu,
   PackagePlus,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Settings,
-  Sparkles,
   X,
 } from "lucide-react";
 import { initializeDesktop, listProducts } from "../services/desktopService";
@@ -24,7 +24,6 @@ import Studio from "../features/studio/Studio";
 import {
   BarcodeView,
   DashboardView,
-  DescriptionsView,
   ExportView,
   HistoryView,
   ImagesView,
@@ -39,7 +38,6 @@ export type AppView =
   | "products"
   | "search"
   | "images"
-  | "descriptions"
   | "barcodes"
   | "export"
   | "history"
@@ -55,7 +53,6 @@ const navigation: Array<{
   { id: "products", label: "Productos", icon: Boxes },
   { id: "search", label: "Buscador", icon: Search },
   { id: "images", label: "Imágenes", icon: Image },
-  { id: "descriptions", label: "Descripciones IA", icon: Sparkles },
   { id: "barcodes", label: "Códigos de barras", icon: Barcode },
   { id: "export", label: "Exportar ficha", icon: FileOutput },
   { id: "history", label: "Historial", icon: History },
@@ -65,8 +62,10 @@ const navigation: Array<{
 function App() {
   const [view, setView] = useState<AppView>("studio");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem("roxwana-sidebar-collapsed") === "true",
+  );
   const [products, setProducts] = useState<ProductDraft[]>([]);
-  const [globalSearch, setGlobalSearch] = useState("");
   const [appMode, setAppMode] = useState<"desktop" | "browser">("browser");
   const setDraft = useProductStore((state) => state.setDraft);
   const draft = useProductStore((state) => state.draft);
@@ -83,23 +82,17 @@ function App() {
     void refreshProducts();
   }, []);
 
-  const filteredQuickResults = useMemo(() => {
-    if (!globalSearch.trim()) return [];
-    const query = globalSearch.toLowerCase();
-    return products
-      .filter((product) =>
-        [product.name, product.modelCode, ...product.variants.map((variant) => variant.sku)]
-          .join(" ")
-          .toLowerCase()
-          .includes(query),
-      )
-      .slice(0, 5);
-  }, [globalSearch, products]);
+  const toggleSidebar = () => {
+    setSidebarCollapsed((collapsed) => {
+      const next = !collapsed;
+      localStorage.setItem("roxwana-sidebar-collapsed", String(next));
+      return next;
+    });
+  };
 
   const openProduct = (product: ProductDraft) => {
     setDraft(product);
     setView("studio");
-    setGlobalSearch("");
   };
 
   const renderView = () => {
@@ -114,8 +107,6 @@ function App() {
         return <SearchView onOpen={openProduct} />;
       case "images":
         return <ImagesView />;
-      case "descriptions":
-        return <DescriptionsView />;
       case "barcodes":
         return <BarcodeView />;
       case "export":
@@ -130,14 +121,28 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
-      <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
+    <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
+      <aside
+        className={`sidebar ${sidebarOpen ? "sidebar--open" : ""} ${
+          sidebarCollapsed ? "sidebar--collapsed" : ""
+        }`}
+      >
         <div className="sidebar__brand">
           <button className="icon-button sidebar__close" onClick={() => setSidebarOpen(false)}>
             <X size={18} />
           </button>
-          <span className="brand-word">ROXWANA</span>
-          <span className="brand-subtitle">Product Manager</span>
+          <button
+            className="sidebar__collapse"
+            onClick={toggleSidebar}
+            title={sidebarCollapsed ? "Expandir menú" : "Plegar menú"}
+            aria-label={sidebarCollapsed ? "Expandir menú" : "Plegar menú"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
+          <div className="sidebar__brand-copy">
+            <span className="brand-word">ROXWANA</span>
+            <span className="brand-subtitle">Product Manager</span>
+          </div>
         </div>
 
         <nav className="sidebar__nav">
@@ -147,6 +152,7 @@ function App() {
               <button
                 key={item.id}
                 className={view === item.id ? "active" : ""}
+                title={sidebarCollapsed ? item.label : undefined}
                 onClick={() => {
                   setView(item.id);
                   setSidebarOpen(false);
@@ -167,7 +173,7 @@ function App() {
 
         <div className="sidebar__profile">
           <span className="avatar">RW</span>
-          <div>
+          <div className="sidebar__profile-copy">
             <strong>Roxwana Team</strong>
             <small>Admin · {appMode === "desktop" ? "Local" : "Demo web"}</small>
           </div>
@@ -177,7 +183,7 @@ function App() {
 
       {sidebarOpen && <button className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
 
-      <main className="workspace">
+      <main className={`workspace ${view === "studio" ? "workspace--studio" : ""}`}>
         <header className="topbar">
           <button className="icon-button topbar__menu" onClick={() => setSidebarOpen(true)}>
             <Menu size={20} />
@@ -185,35 +191,7 @@ function App() {
           <div className="topbar__mobile-brand">
             <span className="brand-word">ROXWANA</span>
           </div>
-          <div className="global-search">
-            <Search size={17} />
-            <input
-              value={globalSearch}
-              onChange={(event) => setGlobalSearch(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && globalSearch) setView("search");
-              }}
-              placeholder="Buscar productos, SKUs, modelos..."
-            />
-            <kbd>Ctrl + K</kbd>
-            {filteredQuickResults.length > 0 && (
-              <div className="global-search__results">
-                {filteredQuickResults.map((product) => (
-                  <button key={product.id} onClick={() => openProduct(product)}>
-                    <span>
-                      <strong>{product.name}</strong>
-                      <small>{product.modelCode}</small>
-                    </span>
-                    <PackagePlus size={16} />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
           <div className="topbar__actions">
-            <button className="icon-button">
-              <Bell size={18} />
-            </button>
             <span className="avatar">RW</span>
             <button className="icon-button">
               <ChevronDown size={15} />
