@@ -7,6 +7,7 @@
     "dev": "vite --configLoader runner",
     "build": "tsc && vite build --configLoader runner",
     "preview": "vite preview --configLoader runner",
+    "whisper:serve": "node whisper-service/server.mjs",
     "tauri": "tauri",
     "test": "vitest run --configLoader runner"
   },

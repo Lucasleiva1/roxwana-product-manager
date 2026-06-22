@@ -926,15 +926,6 @@ export function SettingsView({ appMode }: { appMode: "desktop" | "browser" }) {
           </Panel>
           <Panel title="Voz local" eyebrow="Whisper" icon={<Mic size={18} />}>
             <div className="settings-fields">
-              <label>
-                <span>Python de Whisper</span>
-                <input
-                  value={form.whisperPythonPath}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, whisperPythonPath: event.target.value }))
-                  }
-                />
-              </label>
               <div className="field-row">
                 <label>
                   <span>Modelo</span>
@@ -944,10 +935,7 @@ export function SettingsView({ appMode }: { appMode: "desktop" | "browser" }) {
                       setForm((current) => ({ ...current, whisperModel: event.target.value }))
                     }
                   >
-                    <option value="tiny">Tiny</option>
-                    <option value="base">Base</option>
-                    <option value="small">Small</option>
-                    <option value="medium">Medium</option>
+                    <option value="base-q5_1">Base multilingüe · incluido</option>
                   </select>
                 </label>
                 <label>
@@ -965,11 +953,12 @@ export function SettingsView({ appMode }: { appMode: "desktop" | "browser" }) {
               </div>
               <StatusDot status={appMode === "desktop" ? "success" : "warning"}>
                 {appMode === "desktop"
-                  ? "Transcripción local disponible"
-                  : "Se activa en la aplicación de escritorio"}
+                  ? "Motor Whisper propio incluido"
+                  : "Motor local disponible para pruebas"}
               </StatusDot>
               <p className="settings-note">
-                El audio se procesa en tu computadora. No se envía a un servicio de voz externo.
+                ROXWANA incluye su propio whisper.cpp y el modelo multilingüe. No usa Python,
+                tu traductor ni servicios de voz externos.
               </p>
             </div>
           </Panel>

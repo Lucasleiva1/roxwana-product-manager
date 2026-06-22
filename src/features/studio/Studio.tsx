@@ -47,6 +47,7 @@ import {
 } from "../../lib/productLogic";
 import { useProductStore } from "../../store/useProductStore";
 import {
+  checkWhisperStatus,
   createProductFolder,
   isTauri,
   listProducts,
@@ -159,15 +160,18 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [tagDraft, setTagDraft] = useState("");
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [whisperReady, setWhisperReady] = useState(false);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const galleryInput = useRef<HTMLInputElement>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
   const chatBox = useRef<HTMLDivElement>(null);
   const barcodeRef = useRef<SVGSVGElement>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const audioChunks = useRef<BlobPart[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const pcmChunks = useRef<Float32Array[]>([]);
 
   const sheet = useMemo(() => makeProductSheet(draft), [draft]);
   const issues = useMemo(
@@ -182,6 +186,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
   useEffect(() => {
     checkOllamaStatus(settings.ollamaEndpoint).then((status) => setOllamaConnected(status.connected));
+    checkWhisperStatus().then(setWhisperReady);
   }, [settings.ollamaEndpoint, settings.ollamaModel]);
 
   useEffect(() => {
@@ -223,6 +228,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   useEffect(
     () => () => {
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      void audioContextRef.current?.close();
     },
     [],
   );
@@ -339,44 +345,102 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     }
   };
 
+  const encodeWav = (chunks: Float32Array[], sourceRate: number) => {
+    const sourceLength = chunks.reduce((total, chunk) => total + chunk.length, 0);
+    const source = new Float32Array(sourceLength);
+    let sourceOffset = 0;
+    chunks.forEach((chunk) => {
+      source.set(chunk, sourceOffset);
+      sourceOffset += chunk.length;
+    });
+    const targetRate = 16000;
+    const ratio = sourceRate / targetRate;
+    const outputLength = Math.max(1, Math.round(source.length / ratio));
+    const output = new Float32Array(outputLength);
+    for (let index = 0; index < outputLength; index += 1) {
+      const start = Math.floor(index * ratio);
+      const end = Math.min(source.length, Math.floor((index + 1) * ratio));
+      let sum = 0;
+      for (let cursor = start; cursor < end; cursor += 1) sum += source[cursor];
+      output[index] = sum / Math.max(1, end - start);
+    }
+    const buffer = new ArrayBuffer(44 + output.length * 2);
+    const view = new DataView(buffer);
+    const writeText = (offset: number, value: string) => {
+      for (let index = 0; index < value.length; index += 1) {
+        view.setUint8(offset + index, value.charCodeAt(index));
+      }
+    };
+    writeText(0, "RIFF");
+    view.setUint32(4, 36 + output.length * 2, true);
+    writeText(8, "WAVE");
+    writeText(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, targetRate, true);
+    view.setUint32(28, targetRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeText(36, "data");
+    view.setUint32(40, output.length * 2, true);
+    output.forEach((sample, index) => {
+      const clamped = Math.max(-1, Math.min(1, sample));
+      view.setInt16(44 + index * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+    });
+    return new Blob([buffer], { type: "audio/wav" });
+  };
+
+  const stopRecording = async () => {
+    const context = audioContextRef.current;
+    audioProcessorRef.current?.disconnect();
+    audioSourceRef.current?.disconnect();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    setRecording(false);
+    if (!context) return;
+    const wav = encodeWav(pcmChunks.current, context.sampleRate);
+    await context.close();
+    audioContextRef.current = null;
+    setTranscribing(true);
+    try {
+      const conversationContext = messages.slice(-4).map((item) => item.content).join(" ");
+      const result = await transcribeAudio(wav, conversationContext, settings);
+      if (result.text) setMessage((current) => `${current}${current ? " " : ""}${result.text}`);
+      else notify("No detecté voz en la grabación.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "No pude transcribir el audio.");
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
   const toggleRecording = async () => {
     if (recording) {
-      recorderRef.current?.stop();
+      await stopRecording();
       return;
     }
-    if (!isTauri()) {
-      notify("El dictado con Whisper funciona en la aplicación de escritorio.");
+    if (!whisperReady) {
+      notify("El motor Whisper de ROXWANA todavía no está listo.");
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const preferred = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg"].find((type) =>
-        MediaRecorder.isTypeSupported(type),
-      );
-      const recorder = new MediaRecorder(stream, preferred ? { mimeType: preferred } : undefined);
+      const context = new AudioContext();
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      const silentOutput = context.createGain();
+      silentOutput.gain.value = 0;
+      pcmChunks.current = [];
+      processor.onaudioprocess = (event) => {
+        pcmChunks.current.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(silentOutput);
+      silentOutput.connect(context.destination);
       streamRef.current = stream;
-      recorderRef.current = recorder;
-      audioChunks.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size) audioChunks.current.push(event.data);
-      };
-      recorder.onstop = async () => {
-        setRecording(false);
-        stream.getTracks().forEach((track) => track.stop());
-        setTranscribing(true);
-        try {
-          const blob = new Blob(audioChunks.current, { type: recorder.mimeType || "audio/webm" });
-          const context = messages.slice(-4).map((item) => item.content).join(" ");
-          const result = await transcribeAudio(blob, context, settings);
-          if (result.text) setMessage((current) => `${current}${current ? " " : ""}${result.text}`);
-          else notify("No detecté voz en la grabación.");
-        } catch (error) {
-          notify(error instanceof Error ? error.message : "No pude transcribir el audio.");
-        } finally {
-          setTranscribing(false);
-        }
-      };
-      recorder.start();
+      audioContextRef.current = context;
+      audioSourceRef.current = source;
+      audioProcessorRef.current = processor;
       setRecording(true);
     } catch {
       notify("Necesito permiso para usar el micrófono.");
@@ -522,7 +586,13 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               <div>
                 <span className="live-orb" />
                 <strong>Asistente ROXWANA</strong>
-                <small>{assistantBusy ? "Analizando producto..." : "Listo para escucharte"}</small>
+                <small>
+                  {assistantBusy
+                    ? "Analizando producto..."
+                    : whisperReady
+                      ? "IA y Whisper listos"
+                      : "Preparando Whisper..."}
+                </small>
               </div>
               <label className="model-select">
                 <select

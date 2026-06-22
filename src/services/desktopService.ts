@@ -197,16 +197,37 @@ export async function transcribeAudio(
   context: string,
   settings: AppSettings,
 ): Promise<{ text: string; language: string }> {
+  const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
   if (!isTauri()) {
-    throw new Error("La transcripción local está disponible en la aplicación de escritorio.");
+    const response = await fetch("http://127.0.0.1:8765/transcribe", {
+      method: "POST",
+      headers: {
+        "Content-Type": "audio/wav",
+        "X-Whisper-Language": settings.whisperLanguage,
+        "X-Whisper-Context": encodeURIComponent(context.slice(-500)),
+      },
+      body: new Uint8Array(bytes),
+    });
+    if (!response.ok) {
+      throw new Error("El motor de voz de ROXWANA no está iniciado.");
+    }
+    return response.json() as Promise<{ text: string; language: string }>;
   }
-  const buffer = await blob.arrayBuffer();
   return invoke<{ text: string; language: string }>("transcribe_audio", {
-    audioBytes: Array.from(new Uint8Array(buffer)),
-    mimeType: blob.type || "audio/webm",
+    audioBytes: bytes,
     context,
-    pythonPath: settings.whisperPythonPath,
-    model: settings.whisperModel,
     language: settings.whisperLanguage,
   });
+}
+
+export async function checkWhisperStatus() {
+  if (isTauri()) return true;
+  try {
+    const response = await fetch("http://127.0.0.1:8765/health", {
+      signal: AbortSignal.timeout(1500),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }

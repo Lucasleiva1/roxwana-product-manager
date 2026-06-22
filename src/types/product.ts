@@ -152,7 +152,6 @@ export interface AppSettings {
   ollamaEndpoint: string;
   assistantInstructions: string;
   productRoot: string;
-  whisperPythonPath: string;
   whisperModel: string;
   whisperLanguage: string;
 }

@@ -455,77 +455,93 @@ fn save_product_image(
 fn transcribe_audio(
     app: AppHandle,
     audio_bytes: Vec<u8>,
-    mime_type: String,
     context: String,
-    python_path: String,
-    model: String,
     language: String,
 ) -> Result<TranscriptionResult, String> {
-    let extension = if mime_type.contains("ogg") {
-        "ogg"
-    } else if mime_type.contains("wav") {
-        "wav"
-    } else if mime_type.contains("mp4") {
-        "m4a"
-    } else {
-        "webm"
-    };
+    let average_energy = audio_bytes
+        .get(44..)
+        .unwrap_or_default()
+        .chunks_exact(2)
+        .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]).unsigned_abs() as u64)
+        .sum::<u64>();
+    let sample_count = audio_bytes.get(44..).unwrap_or_default().len() / 2;
+    if sample_count == 0 || average_energy / sample_count as u64 <= 180 {
+        return Ok(TranscriptionResult {
+            text: String::new(),
+            language: if language.trim().is_empty() { "auto" } else { &language }.to_string(),
+        });
+    }
     let audio_path = std::env::temp_dir().join(format!(
-        "roxwana-voice-{}.{}",
-        chrono::Utc::now().timestamp_millis(),
-        extension
+        "roxwana-voice-{}.wav",
+        chrono::Utc::now().timestamp_millis()
+    ));
+    let output_base = std::env::temp_dir().join(format!(
+        "roxwana-transcript-{}",
+        chrono::Utc::now().timestamp_millis()
     ));
     fs::write(&audio_path, audio_bytes).map_err(|error| error.to_string())?;
 
-    let script_path = data_root(&app)?.join("whisper-service").join("transcribe.py");
-    if !script_path.exists() {
+    let dev_root = data_root(&app)?
+        .join("src-tauri")
+        .join("resources")
+        .join("whisper")
+        .join("windows-x64");
+    let whisper_root = if dev_root.exists() {
+        dev_root
+    } else {
+        app.path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?
+            .join("whisper")
+    };
+    let release_dir = whisper_root.join("Release");
+    let executable = release_dir.join("whisper-cli.exe");
+    let model = whisper_root.join("ggml-base-q5_1.bin");
+    if !executable.exists() || !model.exists() {
         let _ = fs::remove_file(&audio_path);
-        return Err("No se encontró el servicio local de Whisper.".to_string());
+        return Err("No se encontró el motor Whisper incluido con ROXWANA.".to_string());
     }
 
-    let python = if python_path.trim().is_empty() {
-        "python".to_string()
+    let prompt: String = context
+        .chars()
+        .rev()
+        .take(500)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    let selected_language = if language.trim().is_empty() {
+        "auto"
     } else {
-        python_path
+        language.as_str()
     };
-    let output = Command::new(python)
-        .arg(script_path)
-        .arg("--audio")
+    let output = Command::new(executable)
+        .current_dir(&release_dir)
+        .arg("-m")
+        .arg(&model)
+        .arg("-f")
         .arg(&audio_path)
-        .arg("--model")
-        .arg(model)
-        .arg("--language")
-        .arg(language)
+        .arg("-l")
+        .arg(selected_language)
+        .args(["-otxt", "-nt", "-of"])
+        .arg(&output_base)
         .arg("--prompt")
-        .arg(context)
+        .arg(prompt)
         .output()
         .map_err(|error| error.to_string());
     let _ = fs::remove_file(&audio_path);
     let output = output?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let payload: Value = serde_json::from_str(stdout.trim()).map_err(|_| {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        format!("Whisper no devolvió una respuesta válida: {}", stderr.trim())
-    })?;
     if !output.status.success() {
-        return Err(payload
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("Whisper no pudo transcribir el audio.")
-            .to_string());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Whisper no pudo transcribir el audio: {}", stderr.trim()));
     }
+
+    let transcript_path = output_base.with_extension("txt");
+    let text = fs::read_to_string(&transcript_path).map_err(|error| error.to_string())?;
+    let _ = fs::remove_file(transcript_path);
     Ok(TranscriptionResult {
-        text: payload
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        language: payload
-            .get("language")
-            .and_then(Value::as_str)
-            .unwrap_or("es")
-            .to_string(),
+        text: text.trim().to_string(),
+        language: selected_language.to_string(),
     })
 }
 

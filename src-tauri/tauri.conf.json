@@ -25,12 +25,16 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost blob: data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:11434; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost blob: data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:11434 http://127.0.0.1:8765; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "resources/whisper/windows-x64/Release/*": "whisper/Release/",
+      "resources/whisper/windows-x64/ggml-base-q5_1.bin": "whisper/ggml-base-q5_1.bin"
+    },
     "shortDescription": "Estudio local de productos, SKU y fichas ROXWANA",
     "longDescription": "Aplicación interna para crear productos, variantes, códigos de barras, imágenes y fichas exportables.",
     "category": "Business",

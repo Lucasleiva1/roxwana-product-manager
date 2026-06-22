@@ -5,6 +5,7 @@ dist/
 .vite/
 target/
 src-tauri/target/
+src-tauri/gen/
 data/*.db
 data/*.db-*
 product-files/*

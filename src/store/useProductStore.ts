@@ -55,9 +55,7 @@ const settingsFromStorage = (): AppSettings => {
     ollamaEndpoint: "http://localhost:11434",
     assistantInstructions: defaultInstructions,
     productRoot: "product-files",
-    whisperPythonPath:
-      "C:\\Users\\jaell\\Desktop\\PAGINAS WEB Y APP\\wisperSolution\\ScribeFloat\\venv\\Scripts\\python.exe",
-    whisperModel: "small",
+    whisperModel: "base-q5_1",
     whisperLanguage: "es",
   };
   try {
