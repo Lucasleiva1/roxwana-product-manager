@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ROXWANA Product Manager",
+  "version": "0.1.0",
+  "identifier": "com.roxwana.productmanager",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ROXWANA Product Manager",
+        "width": 1540,
+        "height": 940,
+        "minWidth": 1120,
+        "minHeight": 720,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "center": true,
+        "backgroundColor": "#080c0e"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost blob: data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:11434; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "shortDescription": "Estudio local de productos, SKU y fichas ROXWANA",
+    "longDescription": "Aplicación interna para crear productos, variantes, códigos de barras, imágenes y fichas exportables.",
+    "category": "Business",
+    "windows": {
+      "wix": {
+        "language": "es-ES"
+      }
+    }
+  }
+}

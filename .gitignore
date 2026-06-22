@@ -1,0 +1,13 @@
+node_modules/
+.npm-cache/
+dist/
+.tools/
+.vite/
+target/
+src-tauri/target/
+data/*.db
+data/*.db-*
+product-files/*
+!product-files/.gitkeep
+*.log
+.DS_Store
