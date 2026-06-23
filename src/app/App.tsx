@@ -8,7 +8,6 @@ import {
   FolderClock,
   Gauge,
   History,
-  Image,
   Menu,
   PackagePlus,
   PanelLeftClose,
@@ -26,7 +25,6 @@ import {
   DashboardView,
   ExportView,
   HistoryView,
-  ImagesView,
   ProductsView,
   SearchView,
   SettingsView,
@@ -37,7 +35,6 @@ export type AppView =
   | "studio"
   | "products"
   | "search"
-  | "images"
   | "barcodes"
   | "export"
   | "history"
@@ -52,7 +49,6 @@ const navigation: Array<{
   { id: "studio", label: "Crear producto", icon: PackagePlus },
   { id: "products", label: "Productos", icon: Boxes },
   { id: "search", label: "Buscador", icon: Search },
-  { id: "images", label: "Imágenes", icon: Image },
   { id: "barcodes", label: "Códigos de barras", icon: Barcode },
   { id: "export", label: "Exportar ficha", icon: FileOutput },
   { id: "history", label: "Historial", icon: History },
@@ -68,6 +64,7 @@ function App() {
   const [products, setProducts] = useState<ProductDraft[]>([]);
   const [appMode, setAppMode] = useState<"desktop" | "browser">("browser");
   const setDraft = useProductStore((state) => state.setDraft);
+  const resetDraft = useProductStore((state) => state.resetDraft);
   const draft = useProductStore((state) => state.draft);
 
   const refreshProducts = async () => {
@@ -91,22 +88,26 @@ function App() {
   };
 
   const openProduct = (product: ProductDraft) => {
+    resetDraft();
     setDraft(product);
     setView("studio");
+  };
+
+  const navigateTo = (nextView: AppView) => {
+    if (nextView === "studio") resetDraft();
+    setView(nextView);
   };
 
   const renderView = () => {
     switch (view) {
       case "dashboard":
-        return <DashboardView products={products} onNavigate={setView} />;
+        return <DashboardView products={products} onNavigate={navigateTo} />;
       case "studio":
-        return <Studio onSaved={refreshProducts} onNavigate={setView} appMode={appMode} />;
+        return <Studio onSaved={refreshProducts} onNavigate={navigateTo} appMode={appMode} />;
       case "products":
         return <ProductsView products={products} onOpen={openProduct} onRefresh={refreshProducts} />;
       case "search":
         return <SearchView onOpen={openProduct} />;
-      case "images":
-        return <ImagesView />;
       case "barcodes":
         return <BarcodeView />;
       case "export":
@@ -154,7 +155,7 @@ function App() {
                 className={view === item.id ? "active" : ""}
                 title={sidebarCollapsed ? item.label : undefined}
                 onClick={() => {
-                  setView(item.id);
+                  navigateTo(item.id);
                   setSidebarOpen(false);
                 }}
               >
@@ -208,7 +209,7 @@ function App() {
             <i className={appMode === "desktop" ? "online" : "warning"} />
             {appMode === "desktop" ? "SQLite local activo" : "Modo navegador · datos locales"}
           </span>
-          <span className="statusbar-model">{draft.modelCode}</span>
+          <span className="statusbar-model">{draft.modelCode || "Producto sin completar"}</span>
           <span>
             <Archive size={14} /> Sin Supabase
           </span>

@@ -7,7 +7,22 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    host: "127.0.0.1",
+    host: "0.0.0.0",
+    proxy: {
+      "/ollama": {
+        target: "http://127.0.0.1:11434",
+        changeOrigin: true,
+        headers: {
+          origin: "http://localhost:11434",
+        },
+        rewrite: (path) => path.replace(/^\/ollama/, ""),
+      },
+      "/whisper": {
+        target: "http://127.0.0.1:8765",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/whisper/, ""),
+      },
+    },
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {

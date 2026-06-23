@@ -111,6 +111,12 @@ export function parseNaturalBrief(input: string): ExtractedBrief {
   } else if (/\bpantalon\b|\bjogger\b/.test(plain)) {
     extracted.garmentType = "PAN";
     extracted.category = "pantalones";
+  } else if (/\bgorra\b|\bcap\b/.test(plain)) {
+    extracted.garmentType = "GOR";
+    extracted.category = "gorras";
+  } else if (/\baccesorio\b|\bllavero\b|\bbolso\b|\bmochila\b/.test(plain)) {
+    extracted.garmentType = "ACC";
+    extracted.category = "accesorios";
   }
 
   const detectedColors = Object.keys(COLOR_ALIASES)
@@ -127,11 +133,22 @@ export function parseNaturalBrief(input: string): ExtractedBrief {
   if (/s\s*(?:a|al|-)\s*xl/.test(plain)) extracted.sizes = ["S", "M", "L", "XL"];
   if (/xs\s*(?:a|al|-)\s*xxl/.test(plain)) extracted.sizes = ["XS", "S", "M", "L", "XL", "XXL"];
 
-  const priceMatch = plain.match(/(?:precio\s*)?\$?\s*(\d{4,7})(?!\s*(?:por|x)\s*talle)/);
-  if (priceMatch) extracted.price = Number(priceMatch[1]);
+  const priceMatch = plain.match(/(?:precio(?:\s+actual)?(?:\s+de)?\s*|vale\s*|cuesta\s*)\$?\s*(\d[\d.]*)/);
+  const standalonePriceMatch = plain.match(/^\s*\$?\s*(\d{4,7}|\d{1,3}(?:\.\d{3})+)\s*(?:pesos?)?\s*$/);
+  const detectedPrice = priceMatch ?? standalonePriceMatch;
+  if (detectedPrice) extracted.price = Number(detectedPrice[1].replace(/\./g, ""));
 
-  const stockMatch = plain.match(/(\d+)\s*(?:por|x)\s*talle/);
+  const previousPriceMatch = plain.match(/(?:precio\s+anterior|antes\s+costaba)\s*\$?\s*(\d[\d.]*)/);
+  if (previousPriceMatch) extracted.previousPrice = Number(previousPriceMatch[1].replace(/\./g, ""));
+
+  const stockMatch = plain.match(/(?:stock\s*(?:de)?\s*)?(\d+)\s*(?:por|x)\s*(?:cada\s+)?talle/);
   if (stockMatch) extracted.stockPerVariant = Number(stockMatch[1]);
+  const stockBySize = [...plain.matchAll(/(?:talle\s+)?(xxxl|xxl|xl|xs|s|m|l)\s*(?:con|:|=|tiene)?\s*(\d+)\s*(?:unidades?|de stock)?/g)];
+  if (stockBySize.length) {
+    extracted.stockBySize = Object.fromEntries(
+      stockBySize.map((match) => [match[1].toUpperCase(), Number(match[2])]),
+    ) as ExtractedBrief["stockBySize"];
+  }
 
   if (/\bunisex\b/.test(plain)) extracted.gender = "unisex";
   else if (/\bmujer\b|\bfemenin/.test(plain)) extracted.gender = "mujer";
@@ -158,21 +175,49 @@ export function parseNaturalBrief(input: string): ExtractedBrief {
   } else if (/\blisa\b|sin diseno/.test(plain)) {
     extracted.modelPrefix =
       extracted.gender === "hombre" ? "LISAH" : extracted.gender === "mujer" ? "LISAM" : "LISAU";
-  } else {
-    extracted.modelPrefix = "RCK";
   }
 
   if (/\brock\b|\brockero\b|\brockera\b/.test(plain)) extracted.styleKeywords?.push("rock");
   if (/\burbano\b|\bstreet\b/.test(plain)) extracted.styleKeywords?.push("urbano");
-  if (/\boversize\b|\bover size\b/.test(plain)) extracted.styleKeywords?.push("oversize");
 
-  extracted.hasFrontPrint = /adelante|frente|frontal/.test(plain);
-  extracted.hasBackPrint = /espalda|dorso|trasera/.test(plain);
+  if (/adelante|frente|frontal/.test(plain)) extracted.hasFrontPrint = true;
+  if (/espalda|dorso|trasera/.test(plain)) extracted.hasBackPrint = true;
 
-  const materialMatch = plain.match(/\b(algodon(?:\s+\d+\/\d+)?|modal|poliester|frisa|jersey)\b/);
+  const materialMatch = plain.match(/\b(algodon(?:\s+\d+\/\d+)?|modal|poliester|frisa|jersey|gabardina|denim|cuero|lino)\b/);
   if (materialMatch) extracted.material = materialMatch[1];
 
-  extracted.name = suggestProductName(extracted);
+  const explicitName = input.match(/(?:nombre|se llama|llam(?:ala|alo|ado|ada))\s*(?:a|como|es|:)?\s*["“]?([^,"”.\n]+)["”]?/i);
+  if (explicitName?.[1]) extracted.name = explicitName[1].trim();
+
+  const categoryMatch = input.match(/categor[ií]a\s*(?:es|:)?\s*([^,.\n]+)/i);
+  if (categoryMatch?.[1]) extracted.category = categoryMatch[1].trim();
+
+  const collectionMatch = input.match(/(?:colecci[oó]n|drop)\s*(?:es|:)?\s*([^,.\n]+)/i);
+  if (collectionMatch?.[1]) extracted.collectionDrop = collectionMatch[1].trim();
+
+  if (/\bno\s+destacad[oa]\b|\bquita\w*\s+(?:de\s+)?destacad[oa]\b/.test(plain)) extracted.highlighted = false;
+  else if (/\bdestacad[oa]\b|\bmarcal[oa]?\s+como\s+destacad[oa]\b/.test(plain)) extracted.highlighted = true;
+
+  const statusAliases = [
+    ["en revision", "en_revision"],
+    ["sin producir", "sin_producir"],
+    ["producido", "producido"],
+    ["publicado", "publicado"],
+    ["aprobado", "aprobado"],
+    ["agotado", "agotado"],
+    ["pausado", "pausado"],
+    ["borrador", "draft"],
+  ] as const;
+  const detectedStatus = statusAliases.find(([label]) => new RegExp(`\\b${label}\\b`).test(plain));
+  if (detectedStatus) extracted.status = detectedStatus[1];
+
+  const notesMatch = input.match(/(?:nota|notas|anot[aá])\s*(?:es|:|que)?\s*([^.\n]+)/i);
+  if (notesMatch?.[1]) extracted.notes = notesMatch[1].trim();
+
+  const orderMatch = plain.match(/(?:orden|posicion)\s*(?:es|:)?\s*(\d+)/);
+  if (orderMatch) extracted.sortOrder = Number(orderMatch[1]);
+
+  if (!extracted.styleKeywords?.length) delete extracted.styleKeywords;
   return extracted;
 }
 
@@ -181,17 +226,18 @@ export function suggestProductName(brief: ExtractedBrief) {
   const style = brief.styleKeywords ?? [];
   const tokens = [
     garment,
-    style.includes("oversize") ? "Oversize" : "",
     style.includes("skull") ? "Rock Skull" : style.includes("motero") ? "Motero" : "Rock",
   ].filter(Boolean);
   return tokens.join(" ");
 }
 
 export function makeModelRaw(prefix: string, modelNumber: number) {
+  if (!prefix || modelNumber <= 0) return "";
   return `${prefix.toUpperCase().replace(/[^A-Z0-9]/g, "")}${String(modelNumber).padStart(3, "0")}`;
 }
 
 export function makeModelCode(garmentType: string, modelRaw: string) {
+  if (!garmentType || !modelRaw) return "";
   return `RXW-${garmentType.toUpperCase()}-${modelRaw.toUpperCase().replace(/[^A-Z0-9]/g, "")}`;
 }
 
@@ -202,6 +248,7 @@ export function generateVariants(
   current: ProductVariant[],
   defaultStock = 0,
 ) {
+  if (!modelCode || !colors.length || !sizes.length) return [];
   const stockByKey = new Map(current.map((variant) => [`${variant.colorCode}-${variant.sizeCode}`, variant.stock]));
   return colors.flatMap((colorCode) =>
     sizes.map((sizeCode) => {
@@ -232,13 +279,25 @@ export function imageFilename(colorCode: ColorCode, imageNumber: number, device:
 }
 
 export function applyBriefToDraft(draft: ProductDraft, brief: ExtractedBrief): ProductDraft {
-  const modelPrefix = brief.modelPrefix ?? draft.modelPrefix;
   const garmentType = brief.garmentType ?? draft.garmentType;
-  const modelRaw = makeModelRaw(modelPrefix, draft.modelNumber);
+  const modelPrefix = (brief.modelPrefix ?? draft.modelPrefix) || (garmentType ? "RCK" : "");
+  const modelNumber = draft.modelNumber;
+  const modelRaw = makeModelRaw(modelPrefix, modelNumber);
   const modelCode = makeModelCode(garmentType, modelRaw);
   const colors = brief.colors?.length ? brief.colors : draft.colors;
   const sizes = brief.sizes?.length ? brief.sizes : draft.sizes;
   const name = brief.name || draft.name;
+  let variants = generateVariants(modelCode, colors, sizes, draft.variants, brief.stockPerVariant ?? 0);
+
+  if (brief.stockPerVariant !== undefined) {
+    variants = variants.map((variant) => ({ ...variant, stock: brief.stockPerVariant! }));
+  }
+  if (brief.stockBySize) {
+    variants = variants.map((variant) => ({
+      ...variant,
+      stock: brief.stockBySize?.[variant.sizeCode] ?? variant.stock,
+    }));
+  }
 
   return {
     ...draft,
@@ -249,53 +308,65 @@ export function applyBriefToDraft(draft: ProductDraft, brief: ExtractedBrief): P
     sizes,
     technique: brief.technique ?? draft.technique,
     price: brief.price ?? draft.price,
+    previousPrice: brief.previousPrice !== undefined ? brief.previousPrice : draft.previousPrice,
     material: brief.material ?? draft.material,
     collectionDrop: brief.collectionDrop ?? draft.collectionDrop,
+    status: brief.status ?? draft.status,
+    highlighted: brief.highlighted ?? draft.highlighted,
+    sortOrder: brief.sortOrder ?? draft.sortOrder,
+    notes: brief.notes ?? draft.notes,
+    shortDescription: brief.shortDescription ?? draft.shortDescription,
+    longDescription: brief.longDescription ?? draft.longDescription,
+    whatsappText: brief.whatsappText ?? draft.whatsappText,
     modelPrefix,
+    modelNumber,
     modelRaw,
     modelCode,
     name,
     slug: slugify(name),
-    tags: [...new Set([...(draft.tags ?? []), ...(brief.styleKeywords ?? [])])],
-    variants: generateVariants(modelCode, colors, sizes, draft.variants, brief.stockPerVariant ?? 0),
+    tags: [...new Set([...(brief.tags ?? draft.tags ?? []), ...(brief.styleKeywords ?? [])])]
+      .filter((tag) => !/^over\s*size$/i.test(tag)),
+    variants,
     updatedAt: new Date().toISOString(),
   };
 }
 
 export function generateDescriptions(draft: ProductDraft, tone: "rockera" | "comercial" | "minimal" = "rockera") {
-  const garment = GARMENT_TYPES[draft.garmentType].toLowerCase();
+  const garmentName = draft.garmentType ? GARMENT_TYPES[draft.garmentType] : "Producto";
+  const garment = garmentName.toLowerCase();
+  const displayName = draft.name || garmentName;
   const colorNames = draft.colors.map((code) => COLOR_CATALOG[code].name.toLowerCase()).join(" y ");
   const material = draft.material && draft.material !== "No definido" ? ` en ${draft.material}` : "";
   const technique = draft.technique !== "No definido" ? ` con terminación ${draft.technique}` : "";
-  const style = draft.tags.includes("oversize") ? "de calce oversize" : "de identidad urbana";
+  const style = "de identidad urbana";
   const primaryShortDescription =
     tone === "minimal"
-      ? `${GARMENT_TYPES[draft.garmentType]} ${colorNames} ${style}${technique}.`
-      : `${GARMENT_TYPES[draft.garmentType]} ${colorNames} ${style}${technique}, creada para llevar el pulso ROXWANA.`;
+      ? `${garmentName} ${colorNames} ${style}${technique}.`
+      : `${garmentName} ${colorNames} ${style}${technique}, creada para llevar el pulso ROXWANA.`;
   const alternateShortDescription =
     tone === "minimal"
-      ? `${draft.name}: ${garment} ${colorNames}${material}, ${style}.`
-      : `${draft.name} combina actitud rockera, ${style} y una presencia pensada para destacar.`;
+      ? `${displayName}: ${garment} ${colorNames}${material}, ${style}.`
+      : `${displayName} combina actitud rockera, ${style} y una presencia pensada para destacar.`;
   const primaryLongDescription =
     tone === "comercial"
-      ? `${draft.name} es una ${garment}${material} pensada para acompañarte todos los días. Su estética rock urbana, su calce cómodo y sus terminaciones cuidadas la convierten en una pieza fácil de combinar y difícil de ignorar.`
+      ? `${displayName} es una ${garment}${material} pensada para acompañarte todos los días. Su estética rock urbana, su calce cómodo y sus terminaciones cuidadas la convierten en una pieza fácil de combinar y difícil de ignorar.`
       : tone === "minimal"
-        ? `${draft.name}. ${GARMENT_TYPES[draft.garmentType]}${material}, ${style}${technique}. Diseño ROXWANA de presencia limpia y carácter urbano.`
-        : `${draft.name} nace del lado más crudo de ROXWANA. Una ${garment}${material} ${style}${technique}, con una presencia que no pide permiso. Hecha para looks urbanos, noches largas y volumen alto.`;
+        ? `${displayName}. ${garmentName}${material}, ${style}${technique}. Diseño ROXWANA de presencia limpia y carácter urbano.`
+        : `${displayName} nace del lado más crudo de ROXWANA. Una ${garment}${material} ${style}${technique}, con una presencia que no pide permiso. Hecha para looks urbanos, noches largas y volumen alto.`;
   const alternateLongDescription =
     tone === "comercial"
-      ? `${draft.name} lleva la identidad ROXWANA a una ${garment}${material} versátil y cómoda. Su diseño urbano${technique} funciona como protagonista del look y se adapta con facilidad a distintas combinaciones.`
+      ? `${displayName} lleva la identidad ROXWANA a una ${garment}${material} versátil y cómoda. Su diseño urbano${technique} funciona como protagonista del look y se adapta con facilidad a distintas combinaciones.`
       : tone === "minimal"
-        ? `${draft.name} reúne una silueta ${style}${material}${technique}. Una pieza urbana, directa y fiel al lenguaje visual de ROXWANA.`
-        : `${draft.name} cruza calle, volumen y actitud en una ${garment}${material} ${style}${technique}. Una pieza ROXWANA para vestirse con carácter y dejar que el diseño hable primero.`;
+        ? `${displayName} reúne una silueta ${style}${material}${technique}. Una pieza urbana, directa y fiel al lenguaje visual de ROXWANA.`
+        : `${displayName} cruza calle, volumen y actitud en una ${garment}${material} ${style}${technique}. Una pieza ROXWANA para vestirse con carácter y dejar que el diseño hable primero.`;
   const useAlternate = draft.shortDescription === primaryShortDescription;
 
   return {
     shortDescription: useAlternate ? alternateShortDescription : primaryShortDescription,
     longDescription: useAlternate ? alternateLongDescription : primaryLongDescription,
     whatsappText: useAlternate
-      ? `Hola, quiero saber qué talles y colores tienen disponibles de ${draft.name}.`
-      : `Quiero consultar por ${draft.name}. ¿Me pasan disponibilidad de talles y colores?`,
+      ? `Hola, quiero saber qué talles y colores tienen disponibles de ${displayName}.`
+      : `Quiero consultar por ${displayName}. ¿Me pasan disponibilidad de talles y colores?`,
   };
 }
 
@@ -337,6 +408,11 @@ export function validateProduct(
     localSkus.add(variant.sku);
   });
   if (!draft.name.trim()) issues.push({ field: "name", message: "Falta el nombre visible.", severity: "error" });
+  if (!draft.garmentType) issues.push({ field: "garmentType", message: "Falta el tipo de prenda.", severity: "error" });
+  if (!draft.gender) issues.push({ field: "gender", message: "Falta el género.", severity: "error" });
+  if (!draft.technique) issues.push({ field: "technique", message: "Falta la técnica.", severity: "error" });
+  if (!draft.colors.length) issues.push({ field: "colors", message: "Falta seleccionar un color.", severity: "error" });
+  if (!draft.sizes.length) issues.push({ field: "sizes", message: "Falta seleccionar un talle.", severity: "error" });
   if (!draft.price) issues.push({ field: "price", message: "Falta el precio.", severity: "error" });
   if (!draft.variants.some((variant) => variant.stock > 0)) {
     issues.push({ field: "stock", message: "Todavía no hay stock cargado.", severity: "error" });
@@ -389,35 +465,33 @@ export function makeProductSheet(draft: ProductDraft) {
 
 export function makeEmptyDraft(): ProductDraft {
   const now = new Date().toISOString();
-  const modelRaw = "SRK004";
-  const modelCode = makeModelCode("REM", modelRaw);
   return {
     id: uid("product"),
-    modelCode,
-    garmentType: "REM",
-    modelPrefix: "SRK",
-    modelNumber: 4,
-    modelRaw,
-    name: "Remera Oversize Rock Skull",
-    slug: "remera-oversize-rock-skull",
-    gender: "unisex",
-    category: "remeras",
+    modelCode: "",
+    garmentType: "",
+    modelPrefix: "",
+    modelNumber: 0,
+    modelRaw: "",
+    name: "",
+    slug: "",
+    gender: "",
+    category: "",
     collectionDrop: "",
-    price: 29900,
+    price: 0,
     previousPrice: null,
     status: "draft",
     highlighted: false,
     sortOrder: 0,
-    technique: "DTF",
-    material: "No definido",
+    technique: "",
+    material: "",
     shortDescription: "",
     longDescription: "",
     whatsappText: "",
-    tags: ["rock", "skull", "oversize", "urbano"],
+    tags: [],
     notes: "",
-    colors: ["NEG"],
-    sizes: ["S", "M", "L", "XL"],
-    variants: generateVariants(modelCode, ["NEG"], ["S", "M", "L", "XL"], [], 2),
+    colors: [],
+    sizes: [],
+    variants: [],
     images: [],
     createdAt: now,
     updatedAt: now,

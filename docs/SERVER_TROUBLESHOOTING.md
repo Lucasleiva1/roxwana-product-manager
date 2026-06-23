@@ -5,7 +5,8 @@ procedimiento que debe seguir Codex en conversaciones nuevas.
 
 ## Contexto
 
-La interfaz es una aplicación React servida por Vite durante el desarrollo. La configuración está
+La interfaz es una aplicación React servida por Vite durante el desarrollo. `npm run dev` inicia
+Vite y también el servicio local Whisper usado por el micrófono. La configuración está
 en `vite.config.ts`:
 
 - Puerto fijo: `1420`.
@@ -53,19 +54,45 @@ Solución:
 En la sesión del 22 de junio de 2026 la IP era `192.168.100.6`, pero no debe quedar codificada como
 valor permanente porque puede cambiar al reconectar la red.
 
+### 4. La interfaz abre, pero la inteligencia parece desconectada
+
+Ollama corre en la computadora en el puerto `11434`. Cuando la aplicación se abre mediante una IP
+de red, una conexión directa del navegador a `http://localhost:11434` puede fallar por aislamiento
+de red o permisos del origen. El resultado es engañoso: el chat sigue respondiendo con el analizador
+local, pero no utiliza realmente el modelo configurado.
+
+Solución: la aplicación web debe llamar a `/ollama` y Vite debe reenviar esa ruta a
+`http://127.0.0.1:11434`. Antes de revisar el comportamiento del asistente, comprobar que:
+
+1. Ollama esté ejecutándose y tenga disponible el modelo seleccionado.
+2. `http://127.0.0.1:1420/ollama/api/tags` devuelva HTTP 200.
+3. Cada mensaje reciba el borrador actual para interpretar correcciones incrementales.
+4. La extracción local no genere nuevamente nombre o prefijo cuando el usuario solamente cambia
+   talles, colores, precio u otro campo.
+5. El stock indicado se aplique también a variantes que ya existían.
+
+Si `/api/tags` responde pero `/api/generate` devuelve HTTP 403 desde la IP local, el proxy debe
+reemplazar el encabezado `Origin` por `http://localhost:11434`. Sin ese ajuste la interfaz puede
+detectar los modelos, pero Ollama rechaza los mensajes reales.
+
 ## Procedimiento recomendado
+
+Si el usuario pide abrir la aplicación como programa de Windows, usar primero
+[WINDOWS_APP_STARTUP.md](WINDOWS_APP_STARTUP.md). Ese documento registra el camino rápido con el
+ejecutable Tauri ya compilado.
 
 1. Comprobar si el puerto `1420` ya está escuchando.
 2. Si ya responde, reutilizar el servidor existente y no iniciar otro.
-3. Si no responde, iniciar Vite como proceso persistente con:
+3. Si no responde, iniciar el entorno completo como proceso persistente con:
 
-   `node node_modules\vite\bin\vite.js --configLoader runner --host 0.0.0.0`
+   `npm.cmd run dev -- --host 0.0.0.0`
 
 4. Verificar desde una llamada separada que `http://127.0.0.1:1420/` devuelve HTTP 200.
-5. Obtener la IPv4 local actual; no reutilizar ciegamente una IP de una sesión anterior.
-6. Abrir `http://<IP-LOCAL>:1420/` en el navegador integrado.
-7. Confirmar visualmente que el título sea `ROXWANA Product Manager`.
-8. Informar al usuario, en términos sencillos, que la web local quedó abierta y proporcionar la URL.
+5. Verificar que `http://127.0.0.1:8765/health` devuelve HTTP 200 para habilitar el micrófono.
+6. Obtener la IPv4 local actual; no reutilizar ciegamente una IP de una sesión anterior.
+7. Abrir `http://<IP-LOCAL>:1420/` en el navegador integrado.
+8. Confirmar visualmente que el título sea `ROXWANA Product Manager`.
+9. Informar al usuario, en términos sencillos, que la web local quedó abierta y proporcionar la URL.
 
 ## Qué significa “en segundo plano”
 
@@ -80,4 +107,3 @@ Escuchar en `0.0.0.0` permite acceder al servidor desde las interfaces de red de
 Normalmente esto lo hace visible para otros dispositivos de la misma red local, sujeto al firewall.
 No equivale a desplegarlo públicamente en Internet. Cuando sólo se necesite el navegador normal de
 la propia computadora, `127.0.0.1` es más restrictivo.
-

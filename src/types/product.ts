@@ -80,13 +80,13 @@ export interface ProductVariant {
 export interface ProductDraft {
   id: string;
   modelCode: string;
-  garmentType: GarmentCode;
+  garmentType: GarmentCode | "";
   modelPrefix: string;
   modelNumber: number;
   modelRaw: string;
   name: string;
   slug: string;
-  gender: "hombre" | "mujer" | "unisex" | "no_definido";
+  gender: "hombre" | "mujer" | "unisex" | "no_definido" | "";
   category: string;
   collectionDrop: string;
   price: number;
@@ -94,7 +94,7 @@ export interface ProductDraft {
   status: ProductStatus;
   highlighted: boolean;
   sortOrder: number;
-  technique: Technique;
+  technique: Technique | "";
   material: string;
   shortDescription: string;
   longDescription: string;
@@ -121,6 +121,8 @@ export interface AssistantMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
+  source?: "ollama" | "local" | "system";
+  model?: string;
 }
 
 export interface ExtractedBrief {
@@ -131,14 +133,24 @@ export interface ExtractedBrief {
   sizes?: SizeCode[];
   technique?: Technique;
   price?: number;
+  previousPrice?: number | null;
   stockPerVariant?: number;
+  stockBySize?: Partial<Record<SizeCode, number>>;
   modelPrefix?: string;
   name?: string;
   material?: string;
   collectionDrop?: string;
+  status?: ProductStatus;
+  highlighted?: boolean;
+  sortOrder?: number;
+  notes?: string;
   styleKeywords?: string[];
   hasFrontPrint?: boolean;
   hasBackPrint?: boolean;
+  shortDescription?: string;
+  longDescription?: string;
+  whatsappText?: string;
+  tags?: string[];
 }
 
 export interface ValidationIssue {

@@ -15,8 +15,6 @@ import {
   FileCheck2,
   FileOutput,
   Folder,
-  Image as ImageIcon,
-  Images,
   Layers3,
   Mic,
   PackageCheck,
@@ -28,7 +26,6 @@ import {
   Settings2,
   Sparkles,
   Trash2,
-  UploadCloud,
   WandSparkles,
 } from "lucide-react";
 import type { AppView } from "../../app/App";
@@ -37,23 +34,18 @@ import {
   COLOR_CATALOG,
   type AppSettings,
   type ProductDraft,
-  type ProductImage,
   type ProductVariant,
 } from "../../types/product";
 import {
-  imageFilename,
   makeProductSheet,
-  roleForImageNumber,
-  uid,
   validateProduct,
 } from "../../lib/productLogic";
 import { useProductStore } from "../../store/useProductStore";
 import {
   createProductFolder,
+  deleteProduct,
   exportProductJson,
-  isTauri,
   openProductFolder,
-  persistProductImage,
   saveBarcodeFiles,
   saveProductFiles,
   searchProducts,
@@ -166,9 +158,27 @@ export function ProductsView({
   onRefresh: () => void | Promise<void>;
 }) {
   const [filter, setFilter] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const visible = products.filter((product) =>
     `${product.name} ${product.modelCode} ${product.status}`.toLowerCase().includes(filter.toLowerCase()),
   );
+
+  const removeProduct = async (product: ProductDraft) => {
+    if (
+      !window.confirm(
+        `¿Eliminar "${product.name || product.modelCode}"? Sus SKU dejarán de estar reservados en la base.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(product.id);
+    try {
+      await deleteProduct(product.id);
+      await onRefresh();
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="page">
@@ -220,9 +230,19 @@ export function ProductsView({
                 </div>
                 <div className="product-card__footer">
                   <strong>{formatPrice(product.price)}</strong>
-                  <Button size="sm" variant="primary" onClick={() => onOpen(product)}>
-                    Abrir <ArrowRight size={14} />
-                  </Button>
+                  <div>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      loading={deletingId === product.id}
+                      onClick={() => void removeProduct(product)}
+                    >
+                      <Trash2 size={14} /> Eliminar
+                    </Button>
+                    <Button size="sm" variant="primary" onClick={() => onOpen(product)}>
+                      Editar <ArrowRight size={14} />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </article>
@@ -243,14 +263,31 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ProductDraft[]>([]);
   const [busy, setBusy] = useState(false);
+  const searchRequest = useRef(0);
 
   const runSearch = async () => {
+    const requestId = ++searchRequest.current;
+    const normalized = query.trim();
+    if (!normalized) {
+      setResults([]);
+      setBusy(false);
+      return;
+    }
     setBusy(true);
-    setResults(await searchProducts(query));
-    setBusy(false);
+    const next = await searchProducts(normalized);
+    if (requestId === searchRequest.current) {
+      setResults(next);
+      setBusy(false);
+    }
   };
 
   useEffect(() => {
+    if (!query.trim()) {
+      searchRequest.current += 1;
+      setResults([]);
+      setBusy(false);
+      return;
+    }
     const timer = window.setTimeout(() => void runSearch(), 220);
     return () => window.clearTimeout(timer);
   }, [query]);
@@ -272,11 +309,11 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
           placeholder="Ejemplo: RXW-REM-SRK004-NEG-M"
           autoFocus
         />
-        <Button variant="primary" loading={busy} onClick={runSearch}>
+        <Button variant="primary" loading={busy} disabled={!query.trim()} onClick={runSearch}>
           Buscar
         </Button>
       </div>
-      <Panel title="Resultados" eyebrow={query ? `Consulta: ${query}` : "Toda la base"}>
+      <Panel title="Resultados" eyebrow={query ? `Consulta: ${query}` : "Ingresá una consulta"}>
         {results.length ? (
           <div className="search-results">
             {results.map((product) => (
@@ -308,7 +345,7 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
                 <div className="search-result__actions">
                   <strong>{formatPrice(product.price)}</strong>
                   <Button variant="primary" onClick={() => onOpen(product)}>
-                    Abrir producto
+                    Editar producto
                   </Button>
                 </div>
               </article>
@@ -322,151 +359,6 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
           />
         )}
       </Panel>
-    </div>
-  );
-}
-
-export function ImagesView() {
-  const { draft, addImage, patchImage, removeImage } = useProductStore();
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const addFiles = (files: FileList | null) => {
-    if (!files) return;
-    Array.from(files).forEach((file, index) => {
-      const imageNumber = draft.images.length + index + 1;
-      const colorCode = draft.colors[0] ?? "NEG";
-      const image: ProductImage = {
-        id: uid("image"),
-        colorCode,
-        imageNumber,
-        device: "desktop",
-        role: roleForImageNumber(imageNumber),
-        originalName: file.name,
-        finalFilename: imageFilename(colorCode, imageNumber, "desktop"),
-        previewUrl: URL.createObjectURL(file),
-        approved: false,
-      };
-      addImage(image);
-      if (isTauri()) {
-        void persistProductImage(draft.modelCode, file.name, image.finalFilename, file)
-          .then((paths) => patchImage(image.id, paths))
-          .catch(() => undefined);
-      }
-    });
-  };
-
-  return (
-    <div className="page">
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">Biblioteca del producto</span>
-          <h1>Imágenes</h1>
-          <p>Ordená, asigná roles y prepará nombres para {draft.modelCode}.</p>
-        </div>
-        <Button variant="primary" onClick={() => inputRef.current?.click()}>
-          <UploadCloud size={17} /> Agregar imágenes
-        </Button>
-      </div>
-      <input ref={inputRef} type="file" multiple accept="image/*" hidden onChange={(e) => addFiles(e.target.files)} />
-      <div
-        className="image-manager"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          addFiles(event.dataTransfer.files);
-        }}
-      >
-        {draft.images.length ? (
-          draft.images.map((image) => (
-            <article className="managed-image" key={image.id}>
-              <div className="managed-image__preview">
-                {image.previewUrl ? <img src={image.previewUrl} alt={image.role} /> : <ImageIcon />}
-                <span>{String(image.imageNumber).padStart(2, "0")}</span>
-              </div>
-              <div className="managed-image__body">
-                <strong>{image.role}</strong>
-                <small>{image.originalName}</small>
-                <code>{image.finalFilename}</code>
-                <div className="field-row">
-                  <label>
-                    <span>Número</span>
-                    <select
-                      value={image.imageNumber}
-                      onChange={(event) => {
-                        const imageNumber = Number(event.target.value);
-                        patchImage(image.id, {
-                          imageNumber,
-                          role: roleForImageNumber(imageNumber),
-                          finalFilename: imageFilename(image.colorCode, imageNumber, image.device),
-                        });
-                      }}
-                    >
-                      {Array.from({ length: 12 }, (_, index) => index + 1).map((number) => (
-                        <option value={number} key={number}>
-                          {String(number).padStart(2, "0")} · {roleForImageNumber(number)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Color</span>
-                    <select
-                      value={image.colorCode}
-                      onChange={(event) => {
-                        const colorCode = event.target.value as ProductImage["colorCode"];
-                        patchImage(image.id, {
-                          colorCode,
-                          finalFilename: imageFilename(colorCode, image.imageNumber, image.device),
-                        });
-                      }}
-                    >
-                      {draft.colors.map((color) => (
-                        <option key={color}>{color}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Device</span>
-                    <select
-                      value={image.device}
-                      onChange={(event) => {
-                        const device = event.target.value as ProductImage["device"];
-                        patchImage(image.id, {
-                          device,
-                          finalFilename: imageFilename(image.colorCode, image.imageNumber, device),
-                        });
-                      }}
-                    >
-                      <option>desktop</option>
-                      <option>mobile</option>
-                      <option>base</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="managed-image__actions">
-                  <label className="approval-check">
-                    <input
-                      type="checkbox"
-                      checked={image.approved}
-                      onChange={(event) => patchImage(image.id, { approved: event.target.checked })}
-                    />
-                    Aprobada
-                  </label>
-                  <Button variant="danger" size="sm" onClick={() => removeImage(image.id)}>
-                    <Trash2 size={14} /> Quitar
-                  </Button>
-                </div>
-              </div>
-            </article>
-          ))
-        ) : (
-          <button className="large-drop-zone" onClick={() => inputRef.current?.click()}>
-            <Images size={38} />
-            <strong>Soltá acá las fotos del producto</strong>
-            <span>Después asignamos 01 portada, 02 espalda, 03 hover y el resto.</span>
-          </button>
-        )}
-      </div>
     </div>
   );
 }

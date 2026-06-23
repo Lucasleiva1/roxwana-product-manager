@@ -60,3 +60,12 @@ neg-03-desktop.webp
 El producto final exige nombre, precio, color, talle, stock y SKU sin duplicados. La falta de
 portada es una advertencia: permite generar un borrador, pero debe resolverse antes de publicar.
 
+## Creación progresiva y unicidad
+
+- Una ficha nueva comienza sin tipo, género, técnica, precio, colores, talles ni SKU.
+- Al elegir el tipo de producto, la aplicación consulta la base y toma el siguiente número de
+  modelo libre para ese tipo y prefijo.
+- No se crea ninguna variante hasta tener código de modelo, color y talle.
+- Quitar un color o talle elimina inmediatamente del borrador los SKU derivados.
+- Eliminar un producto guardado borra sus variantes de la base y libera esos SKU.
+- SQLite conserva restricciones `UNIQUE` para `model_code` y `sku` como última barrera.

@@ -7,6 +7,7 @@ import {
   makeModelCode,
   makeModelRaw,
   slugify,
+  uid,
 } from "../lib/productLogic";
 import type {
   AppSettings,
@@ -18,11 +19,27 @@ import type {
   SizeCode,
 } from "../types/product";
 
-const defaultInstructions = `Sos el asistente interno de ROXWANA Product Manager.
+const legacyDefaultInstructions = `Sos el asistente interno de ROXWANA Product Manager.
 Tu trabajo es acelerar la creación de productos de indumentaria rock urbana.
 Preguntá solo lo necesario, no inventes datos, y marcá como "No definido" lo que el usuario no confirmó.
 Nunca decidas el SKU final: sugerí datos y dejá que el sistema valide la base local.
 Usá español rioplatense claro, directo y sin exageraciones comerciales vacías.`;
+
+const defaultInstructions = `Sos el asistente interno de ROXWANA Product Manager.
+Tu trabajo es conversar, consultar la base local y acelerar la creación de productos de indumentaria rock urbana.
+Usá todos los datos que la aplicación te entregue como contexto y respondé lo que el usuario realmente preguntó.
+Preguntá solo lo necesario, no inventes datos y dejá vacío lo que el usuario no confirmó.
+Nunca decidas el SKU final: sugerí datos y dejá que el sistema genere y valide códigos únicos.
+Usá español rioplatense claro, directo y sin exageraciones comerciales vacías.`;
+
+const welcomeMessage = (): AssistantMessage => ({
+  id: "assistant-welcome",
+  role: "assistant",
+  content:
+    "Contame qué producto querés crear o preguntame por la base de ROXWANA. Voy a usar el catálogo, el stock y la ficha actual como contexto.",
+  timestamp: new Date().toISOString(),
+  source: "system",
+});
 
 interface ProductState {
   draft: ProductDraft;
@@ -62,6 +79,9 @@ const settingsFromStorage = (): AppSettings => {
     const stored = JSON.parse(localStorage.getItem("roxwana-settings-v1") || "{}");
     const settings = { ...defaults, ...stored };
     if (!settings.ollamaModel) settings.ollamaModel = defaults.ollamaModel;
+    if (!settings.assistantInstructions || settings.assistantInstructions === legacyDefaultInstructions) {
+      settings.assistantInstructions = defaults.assistantInstructions;
+    }
     localStorage.setItem("roxwana-settings-v1", JSON.stringify(settings));
     return settings;
   } catch {
@@ -71,15 +91,7 @@ const settingsFromStorage = (): AppSettings => {
 
 export const useProductStore = create<ProductState>((set, get) => ({
   draft: makeEmptyDraft(),
-  messages: [
-    {
-      id: "assistant-welcome",
-      role: "assistant",
-      content:
-        "Contame qué producto querés crear. También podés adjuntar una imagen o hablarme: voy a completar la ficha y preguntarte solo lo que falte.",
-      timestamp: new Date().toISOString(),
-    },
-  ],
+  messages: [welcomeMessage()],
   settings: settingsFromStorage(),
   manualMode: false,
   selectedTone: "rockera",
@@ -88,6 +100,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
   patchDraft: (patch) =>
     set((state) => {
       const next = { ...state.draft, ...patch, updatedAt: new Date().toISOString() };
+      next.tags = next.tags.filter((tag) => !/^over\s*size$/i.test(tag));
       if (patch.name !== undefined && patch.slug === undefined) next.slug = slugify(patch.name);
       if (
         patch.garmentType !== undefined ||
@@ -96,6 +109,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
       ) {
         next.modelRaw = makeModelRaw(next.modelPrefix, next.modelNumber);
         next.modelCode = makeModelCode(next.garmentType, next.modelRaw);
+        if (!next.name && next.modelCode) next.slug = slugify(next.modelCode);
         next.variants = generateVariants(
           next.modelCode,
           next.colors,
@@ -166,7 +180,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
     set((state) => ({
       messages: [
         ...state.messages,
-        { ...message, id: `message-${crypto.randomUUID()}`, timestamp: new Date().toISOString() },
+        { ...message, id: uid("message"), timestamp: new Date().toISOString() },
       ],
     })),
   setManualMode: (manualMode) => set({ manualMode }),
@@ -178,5 +192,5 @@ export const useProductStore = create<ProductState>((set, get) => ({
       return { settings: next };
     }),
   setFolderPath: (folderPath) => set({ folderPath }),
-  resetDraft: () => set({ draft: makeEmptyDraft(), folderPath: "" }),
+  resetDraft: () => set({ draft: makeEmptyDraft(), folderPath: "", messages: [welcomeMessage()] }),
 }));

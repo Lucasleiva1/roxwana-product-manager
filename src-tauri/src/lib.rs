@@ -309,6 +309,26 @@ fn list_products(app: AppHandle) -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
+fn delete_product(app: AppHandle, product_id: String) -> Result<(), String> {
+    let connection = connection(&app)?;
+    let transaction = connection.unchecked_transaction().map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM ai_messages WHERE product_id = ?1", params![product_id])
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM product_images WHERE product_id = ?1", params![product_id])
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM variants WHERE product_id = ?1", params![product_id])
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute("DELETE FROM products WHERE id = ?1", params![product_id])
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn search_products(app: AppHandle, query: String) -> Result<Vec<Value>, String> {
     let connection = connection(&app)?;
     let like = format!("%{}%", query);
@@ -553,6 +573,7 @@ pub fn run() {
             initialize_database,
             save_product,
             list_products,
+            delete_product,
             search_products,
             suggest_next_model,
             create_product_folder,

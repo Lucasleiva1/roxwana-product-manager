@@ -46,6 +46,13 @@ export async function listProducts(): Promise<ProductDraft[]> {
   return readLocalProducts();
 }
 
+export async function deleteProduct(productId: string) {
+  if (isTauri()) {
+    return invoke<void>("delete_product", { productId });
+  }
+  writeLocalProducts(readLocalProducts().filter((product) => product.id !== productId));
+}
+
 export async function searchProducts(query: string): Promise<ProductDraft[]> {
   if (isTauri()) return invoke<ProductDraft[]>("search_products", { query });
   const normalized = query.toLowerCase().trim();
@@ -199,7 +206,7 @@ export async function transcribeAudio(
 ): Promise<{ text: string; language: string }> {
   const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
   if (!isTauri()) {
-    const response = await fetch("http://127.0.0.1:8765/transcribe", {
+    const response = await fetch("/whisper/transcribe", {
       method: "POST",
       headers: {
         "Content-Type": "audio/wav",
@@ -223,7 +230,7 @@ export async function transcribeAudio(
 export async function checkWhisperStatus() {
   if (isTauri()) return true;
   try {
-    const response = await fetch("http://127.0.0.1:8765/health", {
+    const response = await fetch("/whisper/health", {
       signal: AbortSignal.timeout(1500),
     });
     return response.ok;

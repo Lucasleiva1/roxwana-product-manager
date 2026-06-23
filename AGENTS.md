@@ -6,6 +6,9 @@ Estas instrucciones deben revisarse al comenzar cada conversación dentro de est
 
 Leer primero [docs/SERVER_TROUBLESHOOTING.md](docs/SERVER_TROUBLESHOOTING.md).
 
+Si el usuario pide abrir la aplicación como programa de Windows o probar funciones reales de
+escritorio, leer y seguir [docs/WINDOWS_APP_STARTUP.md](docs/WINDOWS_APP_STARTUP.md).
+
 No asumir que `npm run dev` ejecutado en una terminal temporal seguirá activo después de que termine
 la llamada de terminal. El servidor debe iniciarse como un proceso persistente y luego verificarse
 con una petición HTTP.
@@ -21,4 +24,3 @@ Explicar el resultado en lenguaje sencillo:
 - “En segundo plano” significa que el pequeño programa que entrega la web sigue funcionando aunque
   no haya una ventana de terminal visible.
 - Indicar siempre la URL exacta que se abrió.
-

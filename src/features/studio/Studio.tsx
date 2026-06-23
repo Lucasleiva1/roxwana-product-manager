@@ -12,8 +12,10 @@ import {
   FolderPlus,
   ImagePlus,
   LoaderCircle,
+  Maximize2,
   Mic,
   MicOff,
+  Minimize2,
   Plus,
   RefreshCw,
   Save,
@@ -36,7 +38,6 @@ import {
   type SizeCode,
 } from "../../types/product";
 import {
-  generateDescriptions,
   imageFilename,
   makeProductSheet,
   roleForImageNumber,
@@ -56,11 +57,11 @@ import {
   transcribeAudio,
 } from "../../services/desktopService";
 import {
-  askMissingQuestions,
   checkOllamaStatus,
-  extractProductFieldsFromNaturalInput,
   generateProductDescription,
+  runProductAssistant,
   suggestProductField,
+  warmOllamaModel,
 } from "../../services/ollamaService";
 import type { AppView } from "../../app/App";
 
@@ -139,6 +140,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     addMessage,
     setTone,
     setFolderPath,
+    resetDraft,
   } = useProductStore();
 
   const [message, setMessage] = useState("");
@@ -147,10 +149,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [fieldBusy, setFieldBusy] = useState<string | null>(null);
   const [toast, setToast] = useState("");
-  const [ollamaConnected, setOllamaConnected] = useState(false);
+  const [ollamaState, setOllamaState] = useState<
+    "checking" | "warming" | "ready" | "unavailable"
+  >("checking");
+  const [ollamaError, setOllamaError] = useState("");
   const [knownSkus, setKnownSkus] = useState<string[]>([]);
   const [knownModelCodes, setKnownModelCodes] = useState<string[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [galleryExpanded, setGalleryExpanded] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -166,21 +172,91 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const pcmChunks = useRef<Float32Array[]>([]);
+  const openingEmptyDraft = useRef(false);
 
   const sheet = useMemo(() => makeProductSheet(draft), [draft]);
   const issues = useMemo(
     () => validateProduct(draft, knownSkus, knownModelCodes),
     [draft, knownSkus, knownModelCodes],
   );
+  const draftHasContent = Boolean(
+    draft.modelCode ||
+      draft.name ||
+      draft.price ||
+      draft.colors.length ||
+      draft.sizes.length ||
+      draft.images.length ||
+      draft.notes,
+  );
+  const [draftOpen, setDraftOpen] = useState(draftHasContent);
+  const lastDraftId = useRef(draft.id);
   const errors = issues.filter((issue) => issue.severity === "error");
-  const pending = useMemo(() => askMissingQuestions(draft), [draft]);
+  const ollamaConnected = ollamaState === "ready";
   const selectedVariant = draft.variants[0];
+  const completionFields = [
+    Boolean(draft.garmentType),
+    Boolean(draft.name.trim()),
+    Boolean(draft.gender),
+    Boolean(draft.technique),
+    Boolean(draft.colors.length),
+    Boolean(draft.sizes.length),
+    draft.price > 0,
+    draft.variants.some((variant) => variant.stock > 0),
+  ];
+  const completion = Math.round(
+    (completionFields.filter(Boolean).length / completionFields.length) * 100,
+  );
   const mainImage =
     draft.images.find((image) => image.imageNumber === 1) ?? draft.images[0] ?? null;
 
   useEffect(() => {
-    checkOllamaStatus(settings.ollamaEndpoint).then((status) => setOllamaConnected(status.connected));
-    checkWhisperStatus().then(setWhisperReady);
+    if (lastDraftId.current === draft.id) return;
+    lastDraftId.current = draft.id;
+    if (openingEmptyDraft.current) {
+      openingEmptyDraft.current = false;
+      setDraftOpen(true);
+      return;
+    }
+    setDraftOpen(draftHasContent);
+  }, [draft.id, draftHasContent]);
+
+  useEffect(() => {
+    let active = true;
+    setOllamaState("checking");
+    setOllamaError("");
+    void checkOllamaStatus(settings.ollamaEndpoint).then(async (status) => {
+      if (!active) return;
+      if (!status.connected || !status.models.includes(settings.ollamaModel)) {
+        setOllamaError(
+          status.error ||
+            (status.connected
+              ? `El modelo ${settings.ollamaModel} no está instalado.`
+              : "Ollama no está conectado."),
+        );
+        setOllamaState("unavailable");
+        return;
+      }
+      setOllamaState("warming");
+      try {
+        await warmOllamaModel(settings);
+        if (active) setOllamaState("ready");
+      } catch (error) {
+        if (active) {
+          setOllamaError(error instanceof Error ? error.message : "No se pudo cargar el modelo.");
+          setOllamaState("unavailable");
+        }
+      }
+    });
+    const refreshWhisper = () =>
+      checkWhisperStatus().then((ready) => {
+        if (active) setWhisperReady(ready);
+      });
+    void refreshWhisper();
+    const timer = window.setInterval(refreshWhisper, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
   }, [settings.ollamaEndpoint, settings.ollamaModel]);
 
   useEffect(() => {
@@ -190,9 +266,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       const others = products.filter((product) => product.id !== draft.id);
       setKnownSkus(others.flatMap((product) => product.variants.map((variant) => variant.sku)));
       setKnownModelCodes(others.map((product) => product.modelCode));
-      if (!products.some((product) => product.id === draft.id)) {
-        const next = await suggestNextModel(draft.modelPrefix, draft.garmentType);
-        if (active && next !== draft.modelNumber) patchDraft({ modelNumber: next });
+      if (draft.garmentType && !products.some((product) => product.id === draft.id)) {
+        const prefix = draft.modelPrefix || "RCK";
+        const next = await suggestNextModel(prefix, draft.garmentType);
+        if (active && (prefix !== draft.modelPrefix || next !== draft.modelNumber)) {
+          patchDraft({ modelPrefix: prefix, modelNumber: next });
+        }
       }
     });
     return () => {
@@ -234,8 +313,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
   const addProductImage = async (file: File) => {
     const currentDraft = useProductStore.getState().draft;
+    if (!currentDraft.colors.length) {
+      notify("Elegí primero el color del producto");
+      return;
+    }
     const imageNumber = currentDraft.images.length + 1;
-    const colorCode = currentDraft.colors[0] ?? "NEG";
+    const colorCode = currentDraft.colors[0];
     const image: ProductImage = {
       id: uid("image"),
       colorCode,
@@ -313,14 +396,10 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     tone: "rockera" | "comercial" | "minimal",
     instruction = "",
   ) => {
-    if (ollamaConnected && settings.ollamaModel) {
-      try {
-        return await generateProductDescription(sourceDraft, settings, tone, instruction);
-      } catch {
-        // El generador local mantiene disponible el flujo si Ollama deja de responder.
-      }
+    if (!ollamaConnected || !settings.ollamaModel) {
+      throw new Error("El modelo de Ollama todavía no está listo.");
     }
-    return generateDescriptions(sourceDraft, tone);
+    return generateProductDescription(sourceDraft, settings, tone, instruction);
   };
 
   const sendMessage = async () => {
@@ -343,29 +422,46 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       const images = attachments
         .map((item) => item.imageBase64)
         .filter((value): value is string => Boolean(value));
-      const result = await extractProductFieldsFromNaturalInput(
-        [clean, textContents].filter(Boolean).join("\n\n") || "Analizá la imagen del producto.",
+      const assistantInput =
+        [clean, textContents].filter(Boolean).join("\n\n") || "Analizá la imagen del producto.";
+      const products = await listProducts();
+      const result = await runProductAssistant(
+        assistantInput,
         settings,
+        {
+          currentDraft: draft,
+          products,
+          messages: [
+            ...messages,
+            {
+              id: "current-user-message",
+              role: "user",
+              content: assistantInput,
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        },
         images,
       );
-      applyExtractedBrief(result.data);
-      const nextDraft = useProductStore.getState().draft;
-      const requestedTone = toneFromInstruction(clean);
-      const generatedTexts = await createDescriptionTexts(nextDraft, requestedTone, clean);
-      setTone(requestedTone);
-      patchDraft(generatedTexts);
-      const found = [
-        result.data.garmentType && GARMENT_TYPES[result.data.garmentType],
-        result.data.colors?.length && `color ${result.data.colors.join(", ")}`,
-        result.data.technique && `técnica ${result.data.technique}`,
-        result.data.sizes?.length && `talles ${result.data.sizes.join(", ")}`,
-        result.data.price && `precio ${formatPrice(result.data.price)}`,
-      ].filter(Boolean);
+      const nextGarment = result.data.garmentType ?? draft.garmentType;
+      const systemPrefix =
+        (result.data.modelPrefix ?? draft.modelPrefix) || (nextGarment ? "RCK" : "");
+      const needsSkuAssignment =
+        Boolean(nextGarment && systemPrefix) &&
+        (draft.modelNumber <= 0 ||
+          draft.garmentType !== nextGarment ||
+          draft.modelPrefix !== systemPrefix);
+      const systemModelNumber = needsSkuAssignment
+        ? await suggestNextModel(systemPrefix, nextGarment)
+        : draft.modelNumber;
+      applyExtractedBrief({ ...result.data, modelPrefix: systemPrefix || undefined });
+      if (systemModelNumber > 0) patchDraft({ modelNumber: systemModelNumber });
+      setTone(toneFromInstruction(clean));
       addMessage({
         role: "assistant",
-        content: found.length
-          ? `Perfecto. Detecté ${found.join(", ")}, actualicé la ficha y generé las descripciones. Podés pedirme cambios por este chat o editarlas a la derecha.`
-          : "Actualicé las descripciones siguiendo tu indicación. Si querés otro enfoque, decime por ejemplo “más corta”, “más comercial” o “más rockera”.",
+        content: result.reply,
+        source: result.source,
+        model: result.model,
       });
       setAttachments([]);
     } catch {
@@ -453,10 +549,17 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       await stopRecording();
       return;
     }
-    if (!whisperReady) {
-      notify("El motor Whisper de ROXWANA todavía no está listo.");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      notify("El navegador bloquea el micrófono. Abrí la app en localhost o en la versión de escritorio.");
       return;
     }
+    const ready = whisperReady || (await checkWhisperStatus());
+    if (!ready) {
+      setWhisperReady(false);
+      notify("El motor Whisper no está iniciado. Reiniciá el servidor de la aplicación.");
+      return;
+    }
+    setWhisperReady(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const context = new AudioContext();
@@ -491,7 +594,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         "Regenerá los textos con una versión diferente de la actual.",
       );
       patchDraft(result);
-      notify(ollamaConnected ? "Descripciones regeneradas con IA" : "Descripciones regeneradas");
+      notify("Descripciones regeneradas con IA");
+    } catch {
+      notify("Ollama todavía no está listo para generar descripciones.");
     } finally {
       setActionBusy(null);
     }
@@ -518,11 +623,33 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   };
 
   const handleSave = async () => {
+    if (!draft.modelCode) {
+      notify("Elegí primero el tipo de producto para generar un código único.");
+      return;
+    }
     setActionBusy("save");
     try {
-      await saveProduct(draft);
+      const products = await listProducts();
+      const duplicateModel = products.some(
+        (product) => product.id !== draft.id && product.modelCode === draft.modelCode,
+      );
+      if (duplicateModel) {
+        const nextModelNumber = await suggestNextModel(draft.modelPrefix, draft.garmentType);
+        patchDraft({ modelNumber: nextModelNumber });
+      }
+      const productToSave = useProductStore.getState().draft;
+      await saveProduct(productToSave);
       await onSaved();
-      notify("Producto guardado");
+      setPreviewOpen(false);
+      setGalleryExpanded(false);
+      setDetailsOpen(true);
+      resetDraft();
+      setDraftOpen(false);
+      notify(
+        duplicateModel
+          ? "Producto guardado con un nuevo SKU único. Ya podés crear otro."
+          : "Producto guardado. Ya podés crear otro.",
+      );
     } catch {
       notify("No pude guardar el producto");
     } finally {
@@ -531,6 +658,10 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   };
 
   const handleCreateFolder = async () => {
+    if (!draft.modelCode) {
+      notify("Todavía no hay un código de producto para crear la carpeta.");
+      return;
+    }
     setActionBusy("folder");
     try {
       const result = await createProductFolder(draft, sheet);
@@ -574,6 +705,54 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         : [...draft.sizes, size],
     );
 
+  const handleDiscardDraft = () => {
+    const hasContent =
+      Boolean(draft.modelCode || draft.name || draft.price || draft.colors.length || draft.sizes.length);
+    if (hasContent && !window.confirm("¿Descartar esta ficha y empezar un producto vacío?")) return;
+    resetDraft();
+    setPreviewOpen(false);
+    setGalleryExpanded(false);
+    setDetailsOpen(true);
+    setDraftOpen(false);
+    notify("Ficha descartada");
+  };
+
+  const handleStartNewProduct = () => {
+    openingEmptyDraft.current = true;
+    resetDraft();
+    setPreviewOpen(false);
+    setGalleryExpanded(false);
+    setDetailsOpen(true);
+    setDraftOpen(true);
+  };
+
+  if (!draftOpen) {
+    return (
+      <div className="product-creator product-creator--start">
+        {toast && (
+          <div className="toast">
+            <CheckCircle2 size={17} />
+            {toast}
+          </div>
+        )}
+
+        <header className="creator-header">
+          <h1>Crear producto</h1>
+          <p>Empezá una ficha nueva o buscá un producto guardado para editarlo.</p>
+        </header>
+
+        <section className="creator-start" aria-label="Crear producto">
+          <button type="button" className="creator-start__button" onClick={handleStartNewProduct}>
+            <span>
+              <Plus size={42} strokeWidth={1.8} />
+            </span>
+            <strong>Nuevo producto</strong>
+          </button>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="product-creator">
       {toast && (
@@ -593,9 +772,21 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
           <section className="creator-card conversation-card">
             <div className="creator-card__header">
               <div>
-                <span className="live-orb" />
+                <span className={`live-orb live-orb--${ollamaState}`} />
                 <strong>Asistente ROXWANA</strong>
               </div>
+              <span
+                className={`assistant-runtime assistant-runtime--${ollamaState}`}
+                title={ollamaError || undefined}
+              >
+                {ollamaState === "ready"
+                  ? `IA real · ${settings.ollamaModel}`
+                  : ollamaState === "warming"
+                    ? `Cargando ${settings.ollamaModel}…`
+                    : ollamaState === "checking"
+                      ? "Comprobando Ollama…"
+                      : "IA no disponible"}
+              </span>
             </div>
 
             <div className="creator-chat" ref={chatBox}>
@@ -614,6 +805,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                         hour: "2-digit",
                         minute: "2-digit",
                       })}
+                      {item.role === "assistant" && item.source === "ollama" && (
+                        <em>{item.model ?? "Ollama"}</em>
+                      )}
+                      {item.role === "assistant" && item.source === "local" && (
+                        <em>reglas locales</em>
+                      )}
                     </time>
                   </div>
                 </div>
@@ -736,9 +933,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                   <small>La primera imagen será la portada</small>
                 </span>
               </div>
-              <button type="button" onClick={() => galleryInput.current?.click()}>
-                <UploadCloud size={15} /> Agregar imágenes
-              </button>
+              <div className="gallery-header-actions">
+                <button type="button" onClick={() => setGalleryExpanded(true)}>
+                  <Maximize2 size={15} /> Administrar
+                </button>
+                <button type="button" onClick={() => galleryInput.current?.click()}>
+                  <UploadCloud size={15} /> Agregar imágenes
+                </button>
+              </div>
             </div>
             <div className={`product-gallery ${mainImage ? "" : "is-empty"}`}>
               <button
@@ -806,7 +1008,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 </span>
               </div>
               <span className="completion-pill">
-                {Math.max(0, 100 - pending.length * 12)}% completo
+                {completion}% completo
               </span>
             </div>
 
@@ -823,6 +1025,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                       patchDraft({ garmentType: event.target.value as ProductDraft["garmentType"] })
                     }
                   >
+                    <option value="">Seleccionar</option>
                     {Object.entries(GARMENT_TYPES).map(([code, name]) => (
                       <option value={code} key={code}>
                         {name}
@@ -831,17 +1034,32 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                   </select>
                 </FieldShell>
                 <FieldShell label="Género" onSuggest={suggestField} busy={fieldBusy}>
-                  <select
-                    value={draft.gender}
-                    onChange={(event) =>
-                      patchDraft({ gender: event.target.value as ProductDraft["gender"] })
-                    }
-                  >
-                    <option value="no_definido">No definido</option>
-                    <option value="unisex">Unisex</option>
-                    <option value="hombre">Hombre</option>
-                    <option value="mujer">Mujer</option>
-                  </select>
+                  <div className="field-with-shortcuts">
+                    <select
+                      value={draft.gender}
+                      onChange={(event) =>
+                        patchDraft({ gender: event.target.value as ProductDraft["gender"] })
+                      }
+                    >
+                      <option value="">Seleccionar</option>
+                      <option value="unisex">Unisex</option>
+                      <option value="hombre">Hombre</option>
+                      <option value="mujer">Mujer</option>
+                      <option value="no_definido">No definido</option>
+                    </select>
+                    <div className="field-shortcuts" aria-label="Opciones rápidas de género">
+                      {(["hombre", "mujer", "unisex"] as const).map((gender) => (
+                        <button
+                          type="button"
+                          key={gender}
+                          className={draft.gender === gender ? "active" : ""}
+                          onClick={() => patchDraft({ gender })}
+                        >
+                          {gender[0].toUpperCase() + gender.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </FieldShell>
               </div>
 
@@ -853,13 +1071,27 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                   />
                 </FieldShell>
                 <FieldShell label="Precio" field="price" onSuggest={suggestField} busy={fieldBusy}>
-                  <div className="money-input">
-                    <span>$</span>
-                    <input
-                      type="number"
-                      value={draft.price || ""}
-                      onChange={(event) => patchDraft({ price: Number(event.target.value) })}
-                    />
+                  <div className="field-with-shortcuts">
+                    <div className="money-input">
+                      <span>$</span>
+                      <input
+                        type="number"
+                        value={draft.price || ""}
+                        onChange={(event) => patchDraft({ price: Number(event.target.value) })}
+                      />
+                    </div>
+                    <div className="field-shortcuts field-shortcuts--prices" aria-label="Precios rápidos">
+                      {[19000, 29000, 39000, 49000].map((price) => (
+                        <button
+                          type="button"
+                          key={price}
+                          className={draft.price === price ? "active" : ""}
+                          onClick={() => patchDraft({ price })}
+                        >
+                          {new Intl.NumberFormat("es-AR").format(price)}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </FieldShell>
               </div>
@@ -879,8 +1111,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                       patchDraft({ technique: event.target.value as ProductDraft["technique"] })
                     }
                   >
+                    <option value="">Seleccionar</option>
                     {TECHNIQUES.map((technique) => (
-                      <option key={technique}>{technique}</option>
+                      <option value={technique} key={technique}>{technique}</option>
                     ))}
                   </select>
                 </FieldShell>
@@ -1010,7 +1243,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
             </div>
             <div className="sku-code">
               <span>SKU principal</span>
-              <strong>{selectedVariant?.sku ?? draft.modelCode}</strong>
+              <strong>{(selectedVariant?.sku ?? draft.modelCode) || "Pendiente"}</strong>
               <button
                 type="button"
                 onClick={() => {
@@ -1021,10 +1254,20 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 <Copy size={14} />
               </button>
             </div>
-            <div className="barcode-visual">
-              <svg ref={barcodeRef} />
-              <span>{selectedVariant?.barcodeValue ?? draft.modelCode}</span>
-            </div>
+            {selectedVariant ? (
+              <div className="barcode-visual">
+                <svg ref={barcodeRef} />
+                <span>{selectedVariant.barcodeValue}</span>
+              </div>
+            ) : (
+              <div className="sku-placeholder">
+                <Barcode size={24} />
+                <span>
+                  Elegí tipo de producto, color y talle. El sistema consultará la base y generará
+                  un SKU único.
+                </span>
+              </div>
+            )}
             <div className="variant-summary">
               <span>{draft.variants.length} variantes</span>
               <strong>{draft.variants.reduce((total, variant) => total + variant.stock, 0)} unidades</strong>
@@ -1055,6 +1298,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               )}
             </span>
             <div>
+              <Button variant="danger" onClick={handleDiscardDraft}>
+                <Trash2 size={16} /> Descartar
+              </Button>
               <Button onClick={() => onNavigate("settings")}>
                 <Settings2 size={16} /> Ajustes
               </Button>
@@ -1074,6 +1320,162 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
           </section>
         </aside>
       </div>
+
+      {galleryExpanded && (
+        <div className="image-manager-backdrop" onMouseDown={() => setGalleryExpanded(false)}>
+          <section className="image-manager-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span className="eyebrow">Biblioteca del producto</span>
+                <h2>Imágenes · {draft.modelCode}</h2>
+                <p>Ordená, asigná roles, colores y prepará los archivos del producto.</p>
+              </div>
+              <div>
+                <Button variant="primary" onClick={() => galleryInput.current?.click()}>
+                  <UploadCloud size={16} /> Agregar imágenes
+                </Button>
+                <button
+                  type="button"
+                  className="image-manager-close"
+                  onClick={() => setGalleryExpanded(false)}
+                  title="Volver a la vista compacta"
+                >
+                  <Minimize2 size={18} />
+                </button>
+              </div>
+            </header>
+
+            <div
+              className="image-manager image-manager--embedded"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                void handleGalleryImages(event.dataTransfer.files);
+              }}
+            >
+              {draft.images.length ? (
+                draft.images.map((image) => (
+                  <article className="managed-image" key={image.id}>
+                    <div className="managed-image__preview">
+                      {image.previewUrl ? (
+                        <img src={image.previewUrl} alt={image.role} />
+                      ) : (
+                        <ImagePlus size={30} />
+                      )}
+                      <span>{String(image.imageNumber).padStart(2, "0")}</span>
+                    </div>
+                    <div className="managed-image__body">
+                      <strong>{image.role}</strong>
+                      <small>{image.originalName}</small>
+                      <code>{image.finalFilename}</code>
+                      <div className="field-row">
+                        <label>
+                          <span>Número</span>
+                          <select
+                            value={image.imageNumber}
+                            onChange={(event) => {
+                              const imageNumber = Number(event.target.value);
+                              patchImage(image.id, {
+                                imageNumber,
+                                role: roleForImageNumber(imageNumber),
+                                finalFilename: imageFilename(
+                                  image.colorCode,
+                                  imageNumber,
+                                  image.device,
+                                ),
+                              });
+                            }}
+                          >
+                            {Array.from({ length: 12 }, (_, index) => index + 1).map((number) => (
+                              <option value={number} key={number}>
+                                {String(number).padStart(2, "0")} · {roleForImageNumber(number)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Color</span>
+                          <select
+                            value={image.colorCode}
+                            onChange={(event) => {
+                              const colorCode = event.target.value as ProductImage["colorCode"];
+                              patchImage(image.id, {
+                                colorCode,
+                                finalFilename: imageFilename(
+                                  colorCode,
+                                  image.imageNumber,
+                                  image.device,
+                                ),
+                              });
+                            }}
+                          >
+                            {draft.colors.map((color) => (
+                              <option value={color} key={color}>
+                                {color}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Dispositivo</span>
+                          <select
+                            value={image.device}
+                            onChange={(event) => {
+                              const device = event.target.value as ProductImage["device"];
+                              patchImage(image.id, {
+                                device,
+                                finalFilename: imageFilename(
+                                  image.colorCode,
+                                  image.imageNumber,
+                                  device,
+                                ),
+                              });
+                            }}
+                          >
+                            <option value="desktop">desktop</option>
+                            <option value="mobile">mobile</option>
+                            <option value="base">base</option>
+                          </select>
+                        </label>
+                      </div>
+                      <div className="managed-image__actions">
+                        <label className="approval-check">
+                          <input
+                            type="checkbox"
+                            checked={image.approved}
+                            onChange={(event) =>
+                              patchImage(image.id, { approved: event.target.checked })
+                            }
+                          />
+                          Aprobada
+                        </label>
+                        <Button variant="danger" size="sm" onClick={() => removeImage(image.id)}>
+                          <Trash2 size={14} /> Quitar
+                        </Button>
+                      </div>
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <button
+                  className="large-drop-zone"
+                  onClick={() => galleryInput.current?.click()}
+                >
+                  <ImagePlus size={38} />
+                  <strong>Soltá acá las fotos del producto</strong>
+                  <span>La primera será portada; después podés ordenar y asignar roles.</span>
+                </button>
+              )}
+            </div>
+
+            <footer>
+              <Button onClick={() => setGalleryExpanded(false)}>
+                <Minimize2 size={16} /> Volver a vista compacta
+              </Button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {previewOpen && (
         <div className="preview-backdrop" onMouseDown={() => setPreviewOpen(false)}>
@@ -1096,7 +1498,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                     <ImagePlus size={36} />
                   )}
                 </div>
-                <span>{GARMENT_TYPES[draft.garmentType]}</span>
+                <span>{draft.garmentType ? GARMENT_TYPES[draft.garmentType] : "Sin tipo"}</span>
                 <h3>{draft.name}</h3>
                 <strong>{formatPrice(draft.price)}</strong>
                 <p>{draft.shortDescription || "Todavía no hay una descripción corta."}</p>
