@@ -47,14 +47,17 @@ import {
 import { useProductStore } from "../../store/useProductStore";
 import {
   checkWhisperStatus,
-  createProductFolder,
   isTauri,
   listProducts,
+  openProductFolder,
   persistProductImage,
   saveProduct,
+  saveProductPackage,
   saveProductFiles,
   suggestNextModel,
   transcribeAudio,
+  type ProductPackageBarcode,
+  type ProductPackageImage,
 } from "../../services/desktopService";
 import {
   checkOllamaStatus,
@@ -161,6 +164,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [whisperReady, setWhisperReady] = useState(false);
+  const [lastSavedFolder, setLastSavedFolder] = useState("");
 
   const fileInput = useRef<HTMLInputElement>(null);
   const galleryInput = useRef<HTMLInputElement>(null);
@@ -172,6 +176,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const pcmChunks = useRef<Float32Array[]>([]);
+  const imageFiles = useRef(new Map<string, File>());
   const openingEmptyDraft = useRef(false);
 
   const sheet = useMemo(() => makeProductSheet(draft), [draft]);
@@ -313,12 +318,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
   const addProductImage = async (file: File) => {
     const currentDraft = useProductStore.getState().draft;
-    if (!currentDraft.colors.length) {
-      notify("Elegí primero el color del producto");
-      return;
-    }
     const imageNumber = currentDraft.images.length + 1;
-    const colorCode = currentDraft.colors[0];
+    const colorCode = currentDraft.colors[0] ?? "NEG";
+    const previewUrl = await fileAsDataUrl(file);
     const image: ProductImage = {
       id: uid("image"),
       colorCode,
@@ -327,11 +329,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       role: roleForImageNumber(imageNumber),
       originalName: file.name,
       finalFilename: imageFilename(colorCode, imageNumber, "desktop"),
-      previewUrl: URL.createObjectURL(file),
+      previewUrl,
       approved: false,
     };
+    imageFiles.current.set(image.id, file);
     addImage(image);
-    if (isTauri()) {
+    if (isTauri() && currentDraft.modelCode) {
       try {
         const paths = await persistProductImage(
           currentDraft.modelCode,
@@ -353,6 +356,95 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(file);
     });
+
+  const blobAsDataUrl = (blob: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+
+  const fileAsWebpDataUrl = async (file: File) => {
+    const bitmap = await createImageBitmap(file);
+    const maxDimension = 2000;
+    const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("No pude preparar la copia WebP.");
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob(
+        (result) => (result ? resolve(result) : reject(new Error("No pude convertir la imagen."))),
+        "image/webp",
+        0.9,
+      ),
+    );
+    return blobAsDataUrl(blob);
+  };
+
+  const buildPackageImages = async (product: ProductDraft): Promise<ProductPackageImage[]> =>
+    Promise.all(
+      product.images.map(async (image) => {
+        const file = imageFiles.current.get(image.id);
+        const payload: ProductPackageImage = {
+          id: image.id,
+          originalName: image.originalName,
+          finalFilename: image.finalFilename,
+          approved: image.approved,
+          originalPath: image.originalPath,
+          finalPath: image.finalPath,
+        };
+        if (file) {
+          payload.originalDataUrl = await fileAsDataUrl(file);
+          payload.webpDataUrl = await fileAsWebpDataUrl(file);
+        }
+        return payload;
+      }),
+    );
+
+  const buildPackageBarcodes = async (product: ProductDraft): Promise<ProductPackageBarcode[]> =>
+    Promise.all(
+      product.variants.map(async (variant) => {
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        JsBarcode(svg, variant.barcodeValue, {
+          format: "CODE128",
+          background: "#ffffff",
+          lineColor: "#111111",
+          width: 2,
+          height: 88,
+          margin: 18,
+          displayValue: true,
+          font: "monospace",
+          fontSize: 15,
+        });
+        const svgText = new XMLSerializer().serializeToString(svg);
+        const url = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
+        try {
+          const image = document.createElement("img");
+          image.src = url;
+          await image.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(900, image.naturalWidth * 3);
+          canvas.height = Math.max(320, image.naturalHeight * 3);
+          const context = canvas.getContext("2d");
+          if (!context) throw new Error("No pude generar el PNG del código de barras.");
+          context.fillStyle = "#ffffff";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          return {
+            sku: variant.sku,
+            svg: svgText,
+            pngDataUrl: canvas.toDataURL("image/png"),
+          };
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }),
+    );
 
   const handleChatAttachments = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -591,7 +683,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       const result = await createDescriptionTexts(
         draft,
         tone,
-        "Regenerá los textos con una versión diferente de la actual.",
+        "Regeneré los textos con una versión diferente de la actual.",
       );
       patchDraft(result);
       notify("Descripciones regeneradas con IA");
@@ -638,17 +730,27 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         patchDraft({ modelNumber: nextModelNumber });
       }
       const productToSave = useProductStore.getState().draft;
+      const productSheet = makeProductSheet(productToSave);
+      const packageResult = await saveProductPackage({
+        product: productToSave,
+        productSheet,
+        images: await buildPackageImages(productToSave),
+        barcodes: await buildPackageBarcodes(productToSave),
+      });
       await saveProduct(productToSave);
       await onSaved();
+      setFolderPath(packageResult.folderPath);
+      setLastSavedFolder(packageResult.folderPath);
       setPreviewOpen(false);
       setGalleryExpanded(false);
       setDetailsOpen(true);
+      imageFiles.current.clear();
       resetDraft();
       setDraftOpen(false);
       notify(
         duplicateModel
-          ? "Producto guardado con un nuevo SKU único. Ya podés crear otro."
-          : "Producto guardado. Ya podés crear otro.",
+          ? "Producto guardado con carpeta, imágenes y códigos. Ya podés crear otro."
+          : "Producto guardado con carpeta, imágenes y códigos. Ya podés crear otro.",
       );
     } catch {
       notify("No pude guardar el producto");
@@ -664,9 +766,15 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     }
     setActionBusy("folder");
     try {
-      const result = await createProductFolder(draft, sheet);
+      const result = await saveProductPackage({
+        product: draft,
+        productSheet: sheet,
+        images: await buildPackageImages(draft),
+        barcodes: await buildPackageBarcodes(draft),
+      });
       setFolderPath(result.folderPath);
-      notify(appMode === "desktop" ? "Carpeta creada" : "La carpeta se crea en la app de escritorio");
+      setLastSavedFolder(result.folderPath);
+      notify("Carpeta completa creada en Documentos");
     } catch {
       notify("No pude crear la carpeta");
     } finally {
@@ -709,6 +817,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     const hasContent =
       Boolean(draft.modelCode || draft.name || draft.price || draft.colors.length || draft.sizes.length);
     if (hasContent && !window.confirm("¿Descartar esta ficha y empezar un producto vacío?")) return;
+    imageFiles.current.clear();
     resetDraft();
     setPreviewOpen(false);
     setGalleryExpanded(false);
@@ -719,6 +828,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
   const handleStartNewProduct = () => {
     openingEmptyDraft.current = true;
+    imageFiles.current.clear();
     resetDraft();
     setPreviewOpen(false);
     setGalleryExpanded(false);
@@ -748,6 +858,15 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
             </span>
             <strong>Nuevo producto</strong>
           </button>
+          {lastSavedFolder && (
+            <div className="creator-start__last-folder">
+              <span>Última carpeta creada</span>
+              <code>{lastSavedFolder}</code>
+              <Button onClick={() => openProductFolder(lastSavedFolder)}>
+                <FolderPlus size={15} /> Abrir carpeta
+              </Button>
+            </div>
+          )}
         </section>
       </div>
     );
@@ -780,11 +899,11 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 title={ollamaError || undefined}
               >
                 {ollamaState === "ready"
-                  ? `IA real · ${settings.ollamaModel}`
+                  ? `IA real - ${settings.ollamaModel}`
                   : ollamaState === "warming"
-                    ? `Cargando ${settings.ollamaModel}…`
+                    ? `Cargando ${settings.ollamaModel}&`
                     : ollamaState === "checking"
-                      ? "Comprobando Ollama…"
+                      ? "Comprobando Ollama&"
                       : "IA no disponible"}
               </span>
             </div>
@@ -919,7 +1038,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 }}
               />
               <small className="composer-hint">
-                Enter para enviar · Shift + Enter para nueva línea · la IA puede cometer errores
+                Enter para enviar - Shift + Enter para nueva línea - la IA puede cometer errores
               </small>
             </div>
           </section>
@@ -957,7 +1076,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                     <small>JPG, PNG o WebP</small>
                   </span>
                 )}
-                {mainImage && <em>01 · Portada</em>}
+                {mainImage && <em>01 - Portada</em>}
               </button>
               {mainImage && (
                 <div className="gallery-thumbs">
@@ -1327,7 +1446,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
             <header>
               <div>
                 <span className="eyebrow">Biblioteca del producto</span>
-                <h2>Imágenes · {draft.modelCode}</h2>
+                <h2>Imágenes - {draft.modelCode}</h2>
                 <p>Ordená, asigná roles, colores y prepará los archivos del producto.</p>
               </div>
               <div>
@@ -1388,7 +1507,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                           >
                             {Array.from({ length: 12 }, (_, index) => index + 1).map((number) => (
                               <option value={number} key={number}>
-                                {String(number).padStart(2, "0")} · {roleForImageNumber(number)}
+                                {String(number).padStart(2, "0")} - {roleForImageNumber(number)}
                               </option>
                             ))}
                           </select>
@@ -1409,9 +1528,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                               });
                             }}
                           >
-                            {draft.colors.map((color) => (
+                            {(Object.keys(COLOR_CATALOG) as ColorCode[]).map((color) => (
                               <option value={color} key={color}>
-                                {color}
+                                {COLOR_CATALOG[color].name}
                               </option>
                             ))}
                           </select>
@@ -1538,3 +1657,4 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 }
 
 export default Studio;
+

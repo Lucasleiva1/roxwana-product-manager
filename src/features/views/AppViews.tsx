@@ -45,6 +45,7 @@ import {
   createProductFolder,
   deleteProduct,
   exportProductJson,
+  openProductPackageFolder,
   openProductFolder,
   saveBarcodeFiles,
   saveProductFiles,
@@ -159,6 +160,7 @@ export function ProductsView({
 }) {
   const [filter, setFilter] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [openingFolderId, setOpeningFolderId] = useState<string | null>(null);
   const visible = products.filter((product) =>
     `${product.name} ${product.modelCode} ${product.status}`.toLowerCase().includes(filter.toLowerCase()),
   );
@@ -177,6 +179,15 @@ export function ProductsView({
       await onRefresh();
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const openFolder = async (product: ProductDraft) => {
+    setOpeningFolderId(product.id);
+    try {
+      await openProductPackageFolder(product.modelCode);
+    } finally {
+      setOpeningFolderId(null);
     }
   };
 
@@ -238,6 +249,13 @@ export function ProductsView({
                       onClick={() => void removeProduct(product)}
                     >
                       <Trash2 size={14} /> Eliminar
+                    </Button>
+                    <Button
+                      size="sm"
+                      loading={openingFolderId === product.id}
+                      onClick={() => void openFolder(product)}
+                    >
+                      <Folder size={14} /> Carpeta
                     </Button>
                     <Button size="sm" variant="primary" onClick={() => onOpen(product)}>
                       Editar <ArrowRight size={14} />

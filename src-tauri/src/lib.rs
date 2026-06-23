@@ -76,6 +76,36 @@ struct ImageInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PackageImageInput {
+    id: String,
+    original_name: String,
+    final_filename: String,
+    approved: bool,
+    original_path: Option<String>,
+    final_path: Option<String>,
+    original_data_url: Option<String>,
+    webp_data_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageBarcodeInput {
+    sku: String,
+    svg: String,
+    png_data_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProductPackageInput {
+    product: Value,
+    product_sheet: String,
+    images: Vec<PackageImageInput>,
+    barcodes: Vec<PackageBarcodeInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ProductInput {
     id: String,
     model_code: String,
@@ -134,7 +164,13 @@ fn connection(app: &AppHandle) -> Result<Connection, String> {
 }
 
 fn product_folder(app: &AppHandle, model_code: &str) -> Result<PathBuf, String> {
-    Ok(data_root(app)?.join("product-files").join(model_code))
+    Ok(app
+        .path()
+        .document_dir()
+        .map_err(|error| error.to_string())?
+        .join("ROXWANA Product Manager")
+        .join("productos")
+        .join(safe_file_name(model_code, "producto-sin-codigo")))
 }
 
 fn create_folder_structure(folder: &Path) -> Result<(), String> {
@@ -146,6 +182,7 @@ fn create_folder_structure(folder: &Path) -> Result<(), String> {
         "estampas",
         "mockups",
         "codigos-barra",
+        "impresion",
         "notas",
     ] {
         fs::create_dir_all(folder.join(relative)).map_err(|error| error.to_string())?;
@@ -153,11 +190,47 @@ fn create_folder_structure(folder: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn safe_file_name(value: &str, fallback: &str) -> String {
+    let raw = Path::new(value)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(fallback);
+    let clean: String = raw
+        .chars()
+        .map(|character| match character {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '-',
+            character if character.is_control() => '-',
+            character => character,
+        })
+        .collect();
+    let trimmed = clean.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn decode_data_url(value: &str) -> Result<Vec<u8>, String> {
+    let encoded = value
+        .split_once(',')
+        .map(|(_, content)| content)
+        .unwrap_or(value);
+    BASE64.decode(encoded).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn initialize_database(app: AppHandle) -> Result<DatabaseInfo, String> {
     connection(&app)?;
     let path = database_path(&app)?;
-    fs::create_dir_all(data_root(&app)?.join("product-files")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(
+        app.path()
+            .document_dir()
+            .map_err(|error| error.to_string())?
+            .join("ROXWANA Product Manager")
+            .join("productos"),
+    )
+    .map_err(|error| error.to_string())?;
     Ok(DatabaseInfo {
         database_path: path.to_string_lossy().to_string(),
     })
@@ -472,6 +545,78 @@ fn save_product_image(
 }
 
 #[tauri::command]
+fn product_package_folder(app: AppHandle, model_code: String) -> Result<FolderResult, String> {
+    let folder = product_folder(&app, &model_code)?;
+    Ok(FolderResult {
+        folder_path: folder.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<FolderResult, String> {
+    let input: ProductInput =
+        serde_json::from_value(payload.product.clone()).map_err(|error| error.to_string())?;
+    let folder = product_folder(&app, &input.model_code)?;
+    create_folder_structure(&folder)?;
+
+    fs::write(folder.join("ficha/product-sheet.txt"), payload.product_sheet)
+        .map_err(|error| error.to_string())?;
+    fs::write(
+        folder.join("ficha/product.json"),
+        serde_json::to_string_pretty(&payload.product).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if !input.notes.trim().is_empty() {
+        fs::write(folder.join("notas/notas.txt"), input.notes).map_err(|error| error.to_string())?;
+    }
+
+    for image in payload.images {
+        let original_name = safe_file_name(&image.original_name, &format!("{}-original", image.id));
+        let final_name = safe_file_name(&image.final_filename, &format!("{}.webp", image.id));
+        let original_path = folder.join("imagenes/originales").join(original_name);
+        let webp_path = folder.join("imagenes/webp").join(&final_name);
+
+        if let Some(data_url) = image.original_data_url {
+            fs::write(&original_path, decode_data_url(&data_url)?).map_err(|error| error.to_string())?;
+        } else if let Some(source_path) = image.original_path {
+            let source = PathBuf::from(source_path);
+            if source.exists() {
+                fs::copy(source, &original_path).map_err(|error| error.to_string())?;
+            }
+        }
+
+        if let Some(data_url) = image.webp_data_url {
+            fs::write(&webp_path, decode_data_url(&data_url)?).map_err(|error| error.to_string())?;
+        } else if let Some(source_path) = image.final_path {
+            let source = PathBuf::from(source_path);
+            if source.exists() {
+                fs::copy(source, &webp_path).map_err(|error| error.to_string())?;
+            }
+        }
+
+        if image.approved && webp_path.exists() {
+            fs::copy(&webp_path, folder.join("imagenes/aprobadas").join(final_name))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+
+    for barcode in payload.barcodes {
+        let sku = safe_file_name(&barcode.sku, "sku");
+        fs::write(folder.join("codigos-barra").join(format!("{sku}.svg")), barcode.svg)
+            .map_err(|error| error.to_string())?;
+        let png_bytes = decode_data_url(&barcode.png_data_url)?;
+        fs::write(folder.join("codigos-barra").join(format!("{sku}.png")), &png_bytes)
+            .map_err(|error| error.to_string())?;
+        fs::write(folder.join("impresion").join(format!("{sku}.png")), png_bytes)
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(FolderResult {
+        folder_path: folder.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
 fn transcribe_audio(
     app: AppHandle,
     audio_bytes: Vec<u8>,
@@ -580,6 +725,8 @@ pub fn run() {
             write_product_files,
             save_product_image,
             save_barcode_files,
+            product_package_folder,
+            save_product_package,
             transcribe_audio
         ])
         .setup(|app| {

@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
-import type { AppSettings, ProductDraft } from "../types/product";
+import type { AppSettings, ProductDraft, ProductImage } from "../types/product";
 
 declare global {
   interface Window {
@@ -11,6 +11,31 @@ declare global {
 export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
 const STORAGE_KEY = "roxwana-products-v1";
+const DEV_PRODUCT_PACKAGE_ENDPOINT = "/api/product-package";
+
+export interface ProductPackageImage {
+  id: string;
+  originalName: string;
+  finalFilename: string;
+  approved: boolean;
+  originalPath?: string;
+  finalPath?: string;
+  originalDataUrl?: string;
+  webpDataUrl?: string;
+}
+
+export interface ProductPackageBarcode {
+  sku: string;
+  svg: string;
+  pngDataUrl: string;
+}
+
+export interface ProductPackagePayload {
+  product: ProductDraft;
+  productSheet: string;
+  images: ProductPackageImage[];
+  barcodes: ProductPackageBarcode[];
+}
 
 function readLocalProducts(): ProductDraft[] {
   try {
@@ -88,6 +113,72 @@ export async function createProductFolder(product: ProductDraft, productSheet: s
     folderPath: `product-files/${product.modelCode}`,
     browserFallback: true,
   };
+}
+
+function stripTransientImageData(image: ProductImage): ProductImage {
+  const { previewUrl, ...rest } = image;
+  return rest;
+}
+
+function packageProduct(product: ProductDraft): ProductDraft {
+  return {
+    ...product,
+    images: product.images.map(stripTransientImageData),
+  };
+}
+
+async function postDevProductPackage(payload: ProductPackagePayload) {
+  const response = await fetch(DEV_PRODUCT_PACKAGE_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, product: packageProduct(payload.product) }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "No pude crear el paquete del producto.");
+  }
+  return response.json() as Promise<{ folderPath: string }>;
+}
+
+export async function saveProductPackage(payload: ProductPackagePayload) {
+  try {
+    return await postDevProductPackage(payload);
+  } catch (devError) {
+    if (!isTauri()) throw devError;
+    return invoke<{ folderPath: string }>("save_product_package", {
+      payload: { ...payload, product: packageProduct(payload.product) },
+    });
+  }
+}
+
+export async function productPackageFolder(modelCode: string) {
+  try {
+    const response = await fetch(`/api/product-package-path?modelCode=${encodeURIComponent(modelCode)}`);
+    if (response.ok) return (await response.json()) as { folderPath: string };
+  } catch {
+    // Packaged builds do not expose the dev endpoint.
+  }
+  if (isTauri()) return invoke<{ folderPath: string }>("product_package_folder", { modelCode });
+  return { folderPath: `Documentos/ROXWANA Product Manager/productos/${modelCode}` };
+}
+
+export async function openProductPackageFolder(modelCode: string) {
+  try {
+    const response = await fetch("/api/open-product-package", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelCode }),
+    });
+    if (response.ok) return (await response.json()) as { folderPath: string };
+  } catch {
+    // Fall back to Tauri opener when the dev endpoint is not present.
+  }
+  const result = await productPackageFolder(modelCode);
+  if (isTauri()) {
+    await openPath(result.folderPath);
+    return result;
+  }
+  return result;
 }
 
 export async function saveProductFiles(product: ProductDraft, productSheet: string) {

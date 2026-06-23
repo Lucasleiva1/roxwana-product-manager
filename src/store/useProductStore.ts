@@ -71,7 +71,7 @@ const settingsFromStorage = (): AppSettings => {
     ollamaModel: "qwen3.5:4b",
     ollamaEndpoint: "http://localhost:11434",
     assistantInstructions: defaultInstructions,
-    productRoot: "product-files",
+    productRoot: "Documentos/ROXWANA Product Manager/productos",
     whisperModel: "base-q5_1",
     whisperLanguage: "es",
   };
