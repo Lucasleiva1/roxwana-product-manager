@@ -102,6 +102,16 @@ struct ProductPackageInput {
     product_sheet: String,
     images: Vec<PackageImageInput>,
     barcodes: Vec<PackageBarcodeInput>,
+    #[serde(default)]
+    print_files: Vec<PackagePrintFileInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PackagePrintFileInput {
+    id: String,
+    original_name: String,
+    data_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +183,15 @@ fn product_folder(app: &AppHandle, model_code: &str) -> Result<PathBuf, String> 
         .join(safe_file_name(model_code, "producto-sin-codigo")))
 }
 
+fn product_root(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .document_dir()
+        .map_err(|error| error.to_string())?
+        .join("ROXWANA Product Manager")
+        .join("productos"))
+}
+
 fn create_folder_structure(folder: &Path) -> Result<(), String> {
     for relative in [
         "ficha",
@@ -183,6 +202,7 @@ fn create_folder_structure(folder: &Path) -> Result<(), String> {
         "mockups",
         "codigos-barra",
         "impresion",
+        "impresion/trabajos-para-impresion",
         "notas",
     ] {
         fs::create_dir_all(folder.join(relative)).map_err(|error| error.to_string())?;
@@ -384,6 +404,27 @@ fn list_products(app: AppHandle) -> Result<Vec<Value>, String> {
 #[tauri::command]
 fn delete_product(app: AppHandle, product_id: String) -> Result<(), String> {
     let connection = connection(&app)?;
+    let model_code = connection
+        .query_row(
+            "SELECT model_code FROM products WHERE id = ?1",
+            params![product_id.clone()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    if let Some(model_code) = model_code {
+        let root = product_root(&app)?;
+        let folder = product_folder(&app, &model_code)?;
+        if folder.starts_with(&root) && folder.exists() {
+            fs::remove_dir_all(&folder).map_err(|error| {
+                format!(
+                    "No pude eliminar la carpeta del producto '{}': {}",
+                    folder.to_string_lossy(),
+                    error
+                )
+            })?;
+        }
+    }
     let transaction = connection.unchecked_transaction().map_err(|error| error.to_string())?;
     transaction
         .execute("DELETE FROM ai_messages WHERE product_id = ?1", params![product_id])
@@ -611,8 +652,40 @@ fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<
             .map_err(|error| error.to_string())?;
     }
 
+    save_print_files_to_folder(&folder, payload.print_files)?;
+
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
+    })
+}
+
+fn save_print_files_to_folder(
+    product_folder: &Path,
+    print_files: Vec<PackagePrintFileInput>,
+) -> Result<(), String> {
+    if print_files.is_empty() {
+        return Ok(());
+    }
+    let folder = product_folder.join("impresion").join("trabajos-para-impresion");
+    fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    for file in print_files {
+        if let Some(data_url) = file.data_url {
+            let fallback = format!("{}-archivo", file.id);
+            let name = safe_file_name(&file.original_name, &fallback);
+            fs::write(folder.join(name), decode_data_url(&data_url)?)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn save_print_files(app: AppHandle, model_code: String, print_files: Vec<PackagePrintFileInput>) -> Result<FolderResult, String> {
+    let folder = product_folder(&app, &model_code)?;
+    create_folder_structure(&folder)?;
+    save_print_files_to_folder(&folder, print_files)?;
+    Ok(FolderResult {
+        folder_path: folder.join("impresion").join("trabajos-para-impresion").to_string_lossy().to_string(),
     })
 }
 
@@ -725,6 +798,7 @@ pub fn run() {
             write_product_files,
             save_product_image,
             save_barcode_files,
+            save_print_files,
             product_package_folder,
             save_product_package,
             transcribe_audio

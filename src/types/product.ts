@@ -166,4 +166,5 @@ export interface AppSettings {
   productRoot: string;
   whisperModel: string;
   whisperLanguage: string;
+  creatorActionLabels: boolean;
 }

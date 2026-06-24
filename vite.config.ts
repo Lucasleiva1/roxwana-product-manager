@@ -1,8 +1,9 @@
 import { Buffer } from "node:buffer";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -51,6 +52,7 @@ function createFolderStructure(folder: string) {
     "mockups",
     "codigos-barra",
     "impresion",
+    "impresion/trabajos-para-impresion",
     "notas",
   ].forEach((relative) => mkdirSync(join(folder, relative), { recursive: true }));
 }
@@ -90,7 +92,57 @@ function saveProductPackage(payload: any) {
     }
   }
 
+  savePrintFiles(folder, payload.printFiles || []);
+
   return { folderPath: folder };
+}
+
+function savePrintFiles(productFolder: string, printFiles: any[]) {
+  if (!printFiles.length) return;
+  const folder = join(productFolder, "impresion", "trabajos-para-impresion");
+  mkdirSync(folder, { recursive: true });
+  for (const file of printFiles) {
+    if (!file?.dataUrl) continue;
+    const name = safeName(file.originalName, `${file.id || "archivo"}-impresion`);
+    writeDataUrl(join(folder, name), file.dataUrl);
+  }
+}
+
+function deleteProductRecord(productId: string) {
+  const db = new DatabaseSync(join(process.cwd(), "data", "roxwana.db"));
+  try {
+    db.exec("PRAGMA foreign_keys = ON;");
+    const row = db
+      .prepare("SELECT model_code FROM products WHERE id = ?")
+      .get(productId) as { model_code?: string } | undefined;
+    db.exec("BEGIN IMMEDIATE;");
+    try {
+      db.prepare("DELETE FROM ai_messages WHERE product_id = ?").run(productId);
+      db.prepare("DELETE FROM product_images WHERE product_id = ?").run(productId);
+      db.prepare("DELETE FROM variants WHERE product_id = ?").run(productId);
+      const result = db.prepare("DELETE FROM products WHERE id = ?").run(productId);
+      db.exec("COMMIT;");
+      return {
+        deleted: result.changes > 0,
+        modelCode: row?.model_code || "",
+      };
+    } catch (error) {
+      db.exec("ROLLBACK;");
+      throw error;
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function deleteProductFolder(modelCode: string) {
+  if (!modelCode) return true;
+  const folder = productPackageFolder(modelCode);
+  const root = join(PRODUCT_PACKAGE_ROOT, "productos");
+  if (folder.startsWith(root) && existsSync(folder)) {
+    rmSync(folder, { recursive: true, force: true });
+  }
+  return !existsSync(folder);
 }
 
 function productPackagePlugin(): Plugin {
@@ -120,6 +172,74 @@ function productPackagePlugin(): Plugin {
         const folderPath = productPackageFolder(url.searchParams.get("modelCode") || "");
         response.setHeader("Content-Type", "application/json");
         response.end(JSON.stringify({ folderPath }));
+      });
+
+      server.middlewares.use("/api/product-print-files", async (request, response) => {
+        try {
+          if (request.method !== "POST") {
+            response.statusCode = 405;
+            response.end("Method Not Allowed");
+            return;
+          }
+          const payload = await readRequestBody(request);
+          const folder = productPackageFolder(payload?.modelCode || "");
+          createFolderStructure(folder);
+          savePrintFiles(folder, payload?.printFiles || []);
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ folderPath: join(folder, "impresion", "trabajos-para-impresion") }));
+        } catch (error) {
+          response.statusCode = 500;
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        }
+      });
+
+      server.middlewares.use("/api/delete-product-package", async (request, response) => {
+        try {
+          if (request.method !== "POST") {
+            response.statusCode = 405;
+            response.end("Method Not Allowed");
+            return;
+          }
+          const payload = await readRequestBody(request);
+          const folder = productPackageFolder(payload?.modelCode || "");
+          const root = join(PRODUCT_PACKAGE_ROOT, "productos");
+          if (folder.startsWith(root) && existsSync(folder)) {
+            rmSync(folder, { recursive: true, force: true });
+          }
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ deleted: true }));
+        } catch (error) {
+          response.statusCode = 500;
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        }
+      });
+
+      server.middlewares.use("/api/delete-product", async (request, response) => {
+        try {
+          if (request.method !== "POST") {
+            response.statusCode = 405;
+            response.end("Method Not Allowed");
+            return;
+          }
+          const payload = await readRequestBody(request);
+          const productId = String(payload?.productId || "");
+          if (!productId) {
+            response.statusCode = 400;
+            response.end("Falta el id del producto.");
+            return;
+          }
+          const record = deleteProductRecord(productId);
+          const modelCode = record.modelCode || String(payload?.modelCode || "");
+          const folderDeleted = deleteProductFolder(modelCode);
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ folderDeleted, deleted: record.deleted }));
+        } catch (error) {
+          response.statusCode = 500;
+          response.setHeader("Content-Type", "application/json");
+          response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        }
       });
 
       server.middlewares.use("/api/open-product-package", async (request, response) => {

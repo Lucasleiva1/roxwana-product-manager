@@ -74,6 +74,7 @@ const settingsFromStorage = (): AppSettings => {
     productRoot: "Documentos/ROXWANA Product Manager/productos",
     whisperModel: "base-q5_1",
     whisperLanguage: "es",
+    creatorActionLabels: false,
   };
   try {
     const stored = JSON.parse(localStorage.getItem("roxwana-settings-v1") || "{}");

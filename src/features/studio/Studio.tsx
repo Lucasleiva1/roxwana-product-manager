@@ -55,6 +55,7 @@ import {
   listProducts,
   openProductFolder,
   persistProductImage,
+  savePrintFiles,
   saveBarcodeFiles,
   saveProduct,
   saveProductPackage,
@@ -63,6 +64,7 @@ import {
   transcribeAudio,
   type ProductPackageBarcode,
   type ProductPackageImage,
+  type ProductPackagePrintFile,
 } from "../../services/desktopService";
 import {
   checkOllamaStatus,
@@ -87,6 +89,14 @@ interface ChatAttachment {
   previewUrl?: string;
   imageBase64?: string;
   text?: string;
+}
+
+interface PrintWorkFile {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  savedPath?: string;
 }
 
 const formatPrice = (value: number) =>
@@ -233,9 +243,11 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [transcribing, setTranscribing] = useState(false);
   const [whisperReady, setWhisperReady] = useState(false);
   const [lastSavedFolder, setLastSavedFolder] = useState("");
+  const [printWorkFiles, setPrintWorkFiles] = useState<PrintWorkFile[]>([]);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const galleryInput = useRef<HTMLInputElement>(null);
+  const printWorkInput = useRef<HTMLInputElement>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
   const chatBox = useRef<HTMLDivElement>(null);
   const barcodeRef = useRef<SVGSVGElement>(null);
@@ -246,6 +258,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const pcmChunks = useRef<Float32Array[]>([]);
   const imageFiles = useRef(new Map<string, File>());
+  const printWorkFileMap = useRef(new Map<string, File>());
   const openingEmptyDraft = useRef(false);
 
   const sheet = useMemo(() => makeProductSheet(draft), [draft]);
@@ -284,6 +297,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   );
   const mainImage =
     draft.images.find((image) => image.imageNumber === 1) ?? draft.images[0] ?? null;
+  const showCreatorActionLabels = settings.creatorActionLabels;
 
   useEffect(() => {
     if (lastDraftId.current === draft.id) return;
@@ -439,6 +453,21 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       reader.readAsDataURL(file);
     });
 
+  const isPrintWorkFile = (file: File) =>
+    /\.(ai|psd|psb|png|pdf|eps|svg|tif|tiff|jpg|jpeg|webp)$/i.test(file.name);
+
+  const buildPrintFilePayloads = async (items: PrintWorkFile[]): Promise<ProductPackagePrintFile[]> =>
+    Promise.all(
+      items.map(async (item) => {
+        const file = printWorkFileMap.current.get(item.id);
+        return {
+          id: item.id,
+          originalName: item.name,
+          dataUrl: file ? await fileAsDataUrl(file) : undefined,
+        };
+      }),
+    );
+
   const blobAsDataUrl = (blob: Blob) =>
     new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -487,6 +516,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         return payload;
       }),
     );
+
+  const buildPackagePrintFiles = () => buildPrintFilePayloads(printWorkFiles);
 
   const buildPackageBarcodes = async (product: ProductDraft): Promise<ProductPackageBarcode[]> =>
     Promise.all(
@@ -555,6 +586,42 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     for (const file of Array.from(files)) {
       if (file.type.startsWith("image/")) await addProductImage(file);
     }
+  };
+
+  const handlePrintWorkFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const accepted = Array.from(files).filter(isPrintWorkFile);
+    if (!accepted.length) {
+      notify("Elegí archivos AI, PSD, PNG, PDF, EPS, SVG, TIFF, JPG o WebP.");
+      return;
+    }
+    const next = accepted.map((file) => {
+      const id = uid("print");
+      printWorkFileMap.current.set(id, file);
+      return {
+        id,
+        name: file.name,
+        type: file.type || "archivo de impresion",
+        size: file.size,
+      } satisfies PrintWorkFile;
+    });
+    setPrintWorkFiles((current) => [...current, ...next]);
+    const modelCode = useProductStore.getState().draft.modelCode;
+    if (modelCode) {
+      try {
+        await savePrintFiles(modelCode, await buildPrintFilePayloads(next));
+        notify(`${next.length} archivo${next.length === 1 ? "" : "s"} guardado${next.length === 1 ? "" : "s"} en impresion.`);
+      } catch {
+        notify("Los archivos quedaron listos para guardarse con la carpeta.");
+      }
+    } else {
+      notify(`${next.length} archivo${next.length === 1 ? "" : "s"} listo${next.length === 1 ? "" : "s"} para impresion.`);
+    }
+  };
+
+  const removePrintWorkFile = (id: string) => {
+    printWorkFileMap.current.delete(id);
+    setPrintWorkFiles((current) => current.filter((file) => file.id !== id));
   };
 
   const toneFromInstruction = (instruction: string) => {
@@ -818,6 +885,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         productSheet,
         images: await buildPackageImages(productToSave),
         barcodes: await buildPackageBarcodes(productToSave),
+        printFiles: await buildPackagePrintFiles(),
       });
       await saveProduct(productToSave);
       await onSaved();
@@ -828,6 +896,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       setBarcodeOpen(false);
       setDetailsOpen(true);
       imageFiles.current.clear();
+      printWorkFileMap.current.clear();
+      setPrintWorkFiles([]);
       resetDraft();
       setDraftOpen(false);
       notify(
@@ -854,6 +924,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         productSheet: sheet,
         images: await buildPackageImages(draft),
         barcodes: await buildPackageBarcodes(draft),
+        printFiles: await buildPackagePrintFiles(),
       });
       setFolderPath(result.folderPath);
       setLastSavedFolder(result.folderPath);
@@ -954,6 +1025,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       Boolean(draft.modelCode || draft.name || draft.price || draft.colors.length || draft.sizes.length);
     if (hasContent && !window.confirm("¿Descartar esta ficha y empezar un producto vacío?")) return;
     imageFiles.current.clear();
+    printWorkFileMap.current.clear();
+    setPrintWorkFiles([]);
     resetDraft();
     setPreviewOpen(false);
     setGalleryExpanded(false);
@@ -966,6 +1039,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const handleStartNewProduct = () => {
     openingEmptyDraft.current = true;
     imageFiles.current.clear();
+    printWorkFileMap.current.clear();
+    setPrintWorkFiles([]);
     resetDraft();
     setPreviewOpen(false);
     setGalleryExpanded(false);
@@ -1190,13 +1265,40 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                   <small>La primera imagen será la portada</small>
                 </span>
               </div>
-              <div className="gallery-header-actions">
-                <button type="button" onClick={() => setGalleryExpanded(true)}>
-                  <Maximize2 size={15} /> Administrar
+              <div className={`gallery-header-actions ${showCreatorActionLabels ? "" : "is-icon-only"}`}>
+                <button
+                  type="button"
+                  onClick={() => setGalleryExpanded(true)}
+                  title="Administrar imágenes"
+                  aria-label="Administrar imágenes"
+                >
+                  <Maximize2 size={15} />
+                  {showCreatorActionLabels && <span>Administrar</span>}
                 </button>
-                <button type="button" onClick={() => galleryInput.current?.click()}>
-                  <UploadCloud size={15} /> Agregar imágenes
+                <button
+                  type="button"
+                  onClick={() => galleryInput.current?.click()}
+                  title="Agregar imágenes"
+                  aria-label="Agregar imágenes"
+                >
+                  <UploadCloud size={15} />
+                  {showCreatorActionLabels && <span>Agregar imágenes</span>}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => printWorkInput.current?.click()}
+                  title="Trabajos para impresión"
+                  aria-label="Trabajos para impresión"
+                >
+                  <File size={15} />
+                  {showCreatorActionLabels && <span>Trabajos para impresión</span>}
+                </button>
+                {printWorkFiles.length > 0 && (
+                  <span className="print-work-mini-status">
+                    <File size={12} />
+                    {printWorkFiles.length} impresión
+                  </span>
+                )}
               </div>
             </div>
             <div className={`product-gallery ${mainImage ? "" : "is-empty"}`}>
@@ -1248,6 +1350,17 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               accept="image/*"
               onChange={(event) => {
                 void handleGalleryImages(event.target.files);
+                event.currentTarget.value = "";
+              }}
+            />
+            <input
+              ref={printWorkInput}
+              hidden
+              multiple
+              type="file"
+              accept=".ai,.psd,.psb,.png,.pdf,.eps,.svg,.tif,.tiff,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp,application/pdf"
+              onChange={(event) => {
+                void handlePrintWorkFiles(event.target.files);
                 event.currentTarget.value = "";
               }}
             />
@@ -1617,8 +1730,17 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 <p>Ordená, asigná roles, colores y prepará los archivos del producto.</p>
               </div>
               <div>
-                <Button variant="primary" onClick={() => galleryInput.current?.click()}>
-                  <UploadCloud size={16} /> Agregar imágenes
+                <Button
+                  variant="primary"
+                  onClick={() => galleryInput.current?.click()}
+                  title="Agregar imágenes"
+                >
+                  <UploadCloud size={16} />
+                  {showCreatorActionLabels && "Agregar imágenes"}
+                </Button>
+                <Button onClick={() => printWorkInput.current?.click()} title="Trabajos para impresión">
+                  <File size={16} />
+                  {showCreatorActionLabels && "Trabajos para impresión"}
                 </Button>
                 <button
                   type="button"

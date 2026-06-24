@@ -30,11 +30,18 @@ export interface ProductPackageBarcode {
   pngDataUrl: string;
 }
 
+export interface ProductPackagePrintFile {
+  id: string;
+  originalName: string;
+  dataUrl?: string;
+}
+
 export interface ProductPackagePayload {
   product: ProductDraft;
   productSheet: string;
   images: ProductPackageImage[];
   barcodes: ProductPackageBarcode[];
+  printFiles?: ProductPackagePrintFile[];
 }
 
 function readLocalProducts(): ProductDraft[] {
@@ -47,6 +54,16 @@ function readLocalProducts(): ProductDraft[] {
 
 function writeLocalProducts(products: ProductDraft[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return fallback;
+  }
 }
 
 export async function initializeDesktop() {
@@ -71,11 +88,59 @@ export async function listProducts(): Promise<ProductDraft[]> {
   return readLocalProducts();
 }
 
-export async function deleteProduct(productId: string) {
-  if (isTauri()) {
-    return invoke<void>("delete_product", { productId });
+export interface DeleteProductResult {
+  folderDeleted: boolean;
+  folderError?: string;
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timeoutId = 0;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    window.clearTimeout(timeoutId);
   }
-  writeLocalProducts(readLocalProducts().filter((product) => product.id !== productId));
+}
+
+export async function deleteProduct(productId: string, modelCode?: string): Promise<DeleteProductResult> {
+  const deleteViaDevServer = async () => {
+    const response = await fetch("/api/delete-product", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productId, modelCode }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || "No pude eliminar el producto.");
+    }
+    return response.json() as Promise<DeleteProductResult>;
+  };
+
+  if (isTauri()) {
+    try {
+      return await deleteViaDevServer();
+    } catch (error) {
+      await withTimeout(
+        invoke<void>("delete_product", { productId }),
+        30000,
+        "La eliminación tardó demasiado. Cerrá carpetas o archivos abiertos de ese producto e intentá de nuevo.",
+      );
+      return { folderDeleted: false, folderError: errorMessage(error, "No pude eliminar la carpeta del producto.") };
+    }
+  }
+  try {
+    return await deleteViaDevServer();
+  } catch (error) {
+    writeLocalProducts(readLocalProducts().filter((product) => product.id !== productId));
+    return {
+      folderDeleted: false,
+      folderError: errorMessage(error, "No pude eliminar la carpeta del producto."),
+    };
+  }
 }
 
 export async function searchProducts(query: string): Promise<ProductDraft[]> {
@@ -149,6 +214,24 @@ export async function saveProductPackage(payload: ProductPackagePayload) {
       payload: { ...payload, product: packageProduct(payload.product) },
     });
   }
+}
+
+export async function savePrintFiles(modelCode: string, printFiles: ProductPackagePrintFile[]) {
+  if (!printFiles.length) return { folderPath: "" };
+  try {
+    const response = await fetch("/api/product-print-files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelCode, printFiles }),
+    });
+    if (response.ok) return (await response.json()) as { folderPath: string };
+  } catch {
+    // Fall back to Tauri when the dev endpoint is not present.
+  }
+  if (isTauri()) {
+    return invoke<{ folderPath: string }>("save_print_files", { modelCode, printFiles });
+  }
+  return { folderPath: `Documentos/ROXWANA Product Manager/productos/${modelCode}/impresion/trabajos-para-impresion` };
 }
 
 export async function productPackageFolder(modelCode: string) {
