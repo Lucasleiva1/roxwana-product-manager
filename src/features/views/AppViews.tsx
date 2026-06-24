@@ -1,26 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import JsBarcode from "jsbarcode";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
   Barcode,
   Box,
-  CheckCircle2,
-  Clipboard,
   CloudCog,
   Copy,
   Database,
-  Download,
-  ExternalLink,
   FileCheck2,
   FileOutput,
   Folder,
   Layers3,
+  LayoutGrid,
+  LayoutList,
+  LayoutPanelTop,
   Mic,
+  Package,
   PackageCheck,
   PackageOpen,
   PackagePlus,
-  Printer,
   RefreshCw,
   Search,
   Settings2,
@@ -34,21 +32,11 @@ import {
   COLOR_CATALOG,
   type AppSettings,
   type ProductDraft,
-  type ProductVariant,
 } from "../../types/product";
-import {
-  makeProductSheet,
-  validateProduct,
-} from "../../lib/productLogic";
 import { useProductStore } from "../../store/useProductStore";
 import {
-  createProductFolder,
   deleteProduct,
-  exportProductJson,
   openProductPackageFolder,
-  openProductFolder,
-  saveBarcodeFiles,
-  saveProductFiles,
   searchProducts,
 } from "../../services/desktopService";
 import {
@@ -76,7 +64,14 @@ export function DashboardView({
     0,
   );
   const drafts = products.filter((product) => product.status === "draft").length;
+  const ready = products.filter(
+    (product) => product.status !== "draft" && product.variants.some((variant) => variant.stock > 0),
+  ).length;
   const withoutStock = products.filter((product) => product.variants.every((variant) => !variant.stock)).length;
+  const recentProducts = [...products].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
+  const attentionProducts = products
+    .filter((product) => product.status === "draft" || product.variants.every((variant) => !variant.stock))
+    .slice(0, 5);
 
   return (
     <div className="page">
@@ -84,61 +79,130 @@ export function DashboardView({
         <div>
           <span className="eyebrow">Resumen local</span>
           <h1>Dashboard</h1>
-          <p>Productos, producción y tareas del estudio en un solo vistazo.</p>
+          <p>Accesos rapidos al flujo actual: crear, editar, revisar ficha y preparar etiquetas.</p>
         </div>
-        <Button variant="primary" onClick={() => onNavigate("studio")}>
-          <PackagePlus size={17} /> Nuevo producto
-        </Button>
+        <div className="dashboard-heading-actions">
+          <Button onClick={() => onNavigate("products")}>
+            <LayoutGrid size={16} /> Ver productos
+          </Button>
+          <Button variant="primary" onClick={() => onNavigate("studio")}>
+            <PackagePlus size={17} /> Nuevo producto
+          </Button>
+        </div>
       </div>
 
       <div className="stats-grid">
         <StatCard label="Productos" value={products.length} note="Guardados en esta base" icon={<Box />} />
         <StatCard label="Borradores" value={drafts} note="Listos para continuar" icon={<FileOutput />} tone="blue" />
         <StatCard label="Stock total" value={stock} note="Unidades registradas" icon={<Database />} tone="green" />
-        <StatCard label="Sin producir" value={withoutStock} note="Requieren atención" icon={<AlertTriangle />} tone="orange" />
+        <StatCard label="Sin stock" value={withoutStock} note="Revisar antes de publicar" icon={<AlertTriangle />} tone="orange" />
       </div>
 
-      <div className="dashboard-grid">
-        <Panel title="Productos recientes" eyebrow="Actividad" icon={<PackageOpen size={18} />}>
-          {products.length ? (
-            <div className="product-list compact">
-              {products.slice(0, 6).map((product) => (
-                <article key={product.id}>
-                  <span className="product-thumb">{product.name.slice(0, 2).toUpperCase()}</span>
+      <div className="quick-action-grid">
+        <button type="button" onClick={() => onNavigate("studio")}>
+          <PackagePlus size={20} />
+          <span>
+            <strong>Crear producto</strong>
+            <small>Brief, datos, SKU y stock</small>
+          </span>
+          <ArrowRight size={16} />
+        </button>
+        <button type="button" onClick={() => onNavigate("products")}>
+          <LayoutList size={20} />
+          <span>
+            <strong>Gestionar productos</strong>
+            <small>Tarjetas, lista, detalle y copiar codigo</small>
+          </span>
+          <ArrowRight size={16} />
+        </button>
+        <button type="button" onClick={() => onNavigate("search")}>
+          <Search size={20} />
+          <span>
+            <strong>Buscar por SKU</strong>
+            <small>Modelo, talle, color o texto</small>
+          </span>
+          <ArrowRight size={16} />
+        </button>
+        <button type="button" onClick={() => onNavigate("history")}>
+          <PackageCheck size={20} />
+          <span>
+            <strong>Ver historial</strong>
+            <small>Ultimas fichas editadas</small>
+          </span>
+          <ArrowRight size={16} />
+        </button>
+      </div>
+
+      <div className="dashboard-grid dashboard-grid--updated">
+        <Panel title="Continuar productos" eyebrow="Recientes" icon={<PackageOpen size={18} />}>
+          {recentProducts.length ? (
+            <div className="dashboard-product-list">
+              {recentProducts.map((product) => (
+                <button type="button" key={product.id} onClick={() => onNavigate("products")}>
+                  <span className="product-thumb">
+                    {(product.name || product.modelCode || "RX").slice(0, 2).toUpperCase()}
+                  </span>
                   <div>
-                    <strong>{product.name}</strong>
-                    <small>{product.modelCode}</small>
+                    <strong>{product.name || "Producto sin nombre"}</strong>
+                    <small>{product.modelCode || "Codigo pendiente"}</small>
                   </div>
                   <StatusDot status={product.status === "draft" ? "warning" : "success"}>
                     {product.status}
                   </StatusDot>
                   <strong>{formatPrice(product.price)}</strong>
-                </article>
+                  <ArrowRight size={14} />
+                </button>
               ))}
             </div>
           ) : (
             <EmptyState
               icon={<PackagePlus />}
-              title="Todavía no hay productos guardados"
-              description="El primer borrador está listo en Crear producto."
+              title="Todavia no hay productos guardados"
+              description="El primer borrador esta listo en Crear producto."
               action={<Button onClick={() => onNavigate("studio")}>Abrir estudio</Button>}
             />
           )}
         </Panel>
 
-        <Panel title="Flujo recomendado" eyebrow="Próximo paso" icon={<Layers3 size={18} />}>
-          <div className="workflow-list">
+        <Panel title="Atencion rapida" eyebrow={`${attentionProducts.length} pendientes`} icon={<AlertTriangle size={18} />}>
+          {attentionProducts.length ? (
+            <div className="attention-list">
+              {attentionProducts.map((product) => (
+                <button type="button" key={product.id} onClick={() => onNavigate("products")}>
+                  <span>
+                    <strong>{product.name || product.modelCode || "Producto sin nombre"}</strong>
+                    <small>
+                      {product.status === "draft" ? "Borrador" : "Sin stock cargado"} - {product.modelCode || "Sin codigo"}
+                    </small>
+                  </span>
+                  <ArrowRight size={14} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon={<PackageCheck />}
+              title="Sin pendientes urgentes"
+              description="Los productos guardados tienen stock o ya salieron de borrador."
+            />
+          )}
+        </Panel>
+
+        <Panel title="Flujo actualizado" eyebrow={`${ready} productos activos`} icon={<Layers3 size={18} />}>
+          <div className="workflow-list workflow-list--current">
             {[
-              ["1", "Escribí el brief", "Prenda, diseño, talles, precio y stock."],
-              ["2", "Revisá el SKU", "La base valida el modelo y cada variante."],
-              ["3", "Asigná imágenes", "01 portada, 03 hover, 05 espalda modelo."],
-              ["4", "Exportá la ficha", "TXT y JSON listos para Product Studio."],
-            ].map(([number, title, description]) => (
-              <div key={number}>
-                <span>{number}</span>
+              ["1", "Crear brief", "Prenda, dise�o, talles, precio y stock desde Crear producto.", Package],
+              ["2", "Revisar SKU", "El codigo y las variantes quedan en el bloque SKU y codigo de barras.", Barcode],
+              ["3", "Cargar imagenes", "Portada, hover, espalda y detalles dentro de la ficha.", PackageOpen],
+              ["4", "Vista previa", "Imprimir, copiar, guardar TXT/JSON y crear carpeta desde la vista previa.", FileCheck2],
+              ["5", "Etiqueta", "Abrir Ver etiqueta para imprimir o guardar SVG + PNG por variante.", LayoutPanelTop],
+            ].map(([number, title, description, Icon]) => (
+              <div key={number as string}>
+                <span>{number as string}</span>
                 <div>
-                  <strong>{title}</strong>
-                  <small>{description}</small>
+                  <Icon size={15} />
+                  <strong>{title as string}</strong>
+                  <small>{description as string}</small>
                 </div>
               </div>
             ))}
@@ -148,7 +212,6 @@ export function DashboardView({
     </div>
   );
 }
-
 export function ProductsView({
   products,
   onOpen,
@@ -159,6 +222,8 @@ export function ProductsView({
   onRefresh: () => void | Promise<void>;
 }) {
   const [filter, setFilter] = useState("");
+  const [viewMode, setViewMode] = useState<"cards" | "list" | "detail">("cards");
+  const [copiedCode, setCopiedCode] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [openingFolderId, setOpeningFolderId] = useState<string | null>(null);
   const visible = products.filter((product) =>
@@ -191,8 +256,78 @@ export function ProductsView({
     }
   };
 
+  const totalStock = (product: ProductDraft) =>
+    product.variants.reduce((sum, variant) => sum + variant.stock, 0);
+
+  const productCover = (product: ProductDraft) => (
+    <div className="product-card__cover">
+      {product.images[0]?.previewUrl ? (
+        <img src={product.images[0].previewUrl} alt={product.name} />
+      ) : (
+        <>
+          <span className="brand-word">RXW</span>
+          <small>PRODUCT STUDIO</small>
+        </>
+      )}
+      <StatusDot status={product.status === "draft" ? "warning" : "success"}>
+        {product.status}
+      </StatusDot>
+    </div>
+  );
+
+  const productActions = (product: ProductDraft) => (
+    <div className="product-actions">
+      <Button
+        size="sm"
+        variant="danger"
+        loading={deletingId === product.id}
+        onClick={() => void removeProduct(product)}
+      >
+        <Trash2 size={14} /> Eliminar
+      </Button>
+      <Button
+        size="sm"
+        loading={openingFolderId === product.id}
+        onClick={() => void openFolder(product)}
+      >
+        <Folder size={14} /> Carpeta
+      </Button>
+      <Button size="sm" variant="primary" onClick={() => onOpen(product)}>
+        Editar <ArrowRight size={14} />
+      </Button>
+    </div>
+  );
+
+  const copyProductCode = (code: string) => {
+    if (!code) return;
+    void navigator.clipboard.writeText(code);
+    setCopiedCode(code);
+    window.setTimeout(() => setCopiedCode((current) => (current === code ? "" : current)), 1800);
+  };
+
+  const productCode = (product: ProductDraft) => (
+    <div className="product-code-copy">
+      <code>{product.modelCode || "Sin codigo"}</code>
+      <button
+        type="button"
+        onClick={() => copyProductCode(product.modelCode)}
+        disabled={!product.modelCode}
+        title="Copiar codigo"
+        aria-label={`Copiar codigo ${product.modelCode || "del producto"}`}
+      >
+        <Copy size={13} />
+      </button>
+    </div>
+  );
+
   return (
     <div className="page">
+      {copiedCode && (
+        <div className="toast">
+          <Copy size={17} />
+          Codigo copiado: {copiedCode}
+        </div>
+      )}
       <div className="page-heading">
         <div>
           <span className="eyebrow">Base local</span>
@@ -212,55 +347,53 @@ export function ProductsView({
             placeholder="Filtrar por nombre, modelo o estado..."
           />
         </div>
+        <div className="view-switch" aria-label="Vista de productos">
+          {[
+            ["cards", LayoutGrid, "Tarjetas"],
+            ["list", LayoutList, "Lista"],
+            ["detail", LayoutPanelTop, "Detalle"],
+          ].map(([mode, Icon, label]) => (
+            <button
+              type="button"
+              key={mode as string}
+              className={viewMode === mode ? "active" : ""}
+              title={label as string}
+              onClick={() => setViewMode(mode as "cards" | "list" | "detail")}
+            >
+              <Icon size={15} />
+              <span>{label as string}</span>
+            </button>
+          ))}
+        </div>
         <StatusDot status="neutral">{visible.length} resultados</StatusDot>
       </div>
       {visible.length ? (
-        <div className="product-grid">
+        <div className={`product-grid product-grid--${viewMode}`}>
           {visible.map((product) => (
             <article className="product-card" key={product.id}>
-              <div className="product-card__cover">
-                {product.images[0]?.previewUrl ? (
-                  <img src={product.images[0].previewUrl} alt={product.name} />
-                ) : (
-                  <>
-                    <span className="brand-word">RXW</span>
-                    <small>PRODUCT STUDIO</small>
-                  </>
-                )}
-                <StatusDot status={product.status === "draft" ? "warning" : "success"}>
-                  {product.status}
-                </StatusDot>
-              </div>
+              {productCover(product)}
               <div className="product-card__body">
                 <span className="eyebrow">{product.category}</span>
                 <h3>{product.name}</h3>
-                <code>{product.modelCode}</code>
+                {productCode(product)}
+                {viewMode === "detail" && (
+                  <p className="product-card__description">
+                    {product.shortDescription || product.longDescription || "Sin descripción todavía."}
+                  </p>
+                )}
                 <div className="product-card__meta">
                   <span>{product.variants.length} variantes</span>
-                  <span>{product.variants.reduce((sum, variant) => sum + variant.stock, 0)} unidades</span>
+                  <span>{totalStock(product)} unidades</span>
+                  {viewMode === "detail" && (
+                    <>
+                      <span>{product.colors.length} colores</span>
+                      <span>{product.sizes.join(", ") || "Sin talles"}</span>
+                    </>
+                  )}
                 </div>
                 <div className="product-card__footer">
                   <strong>{formatPrice(product.price)}</strong>
-                  <div>
-                    <Button
-                      size="sm"
-                      variant="danger"
-                      loading={deletingId === product.id}
-                      onClick={() => void removeProduct(product)}
-                    >
-                      <Trash2 size={14} /> Eliminar
-                    </Button>
-                    <Button
-                      size="sm"
-                      loading={openingFolderId === product.id}
-                      onClick={() => void openFolder(product)}
-                    >
-                      <Folder size={14} /> Carpeta
-                    </Button>
-                    <Button size="sm" variant="primary" onClick={() => onOpen(product)}>
-                      Editar <ArrowRight size={14} />
-                    </Button>
-                  </div>
+                  {productActions(product)}
                 </div>
               </div>
             </article>
@@ -381,211 +514,6 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
   );
 }
 
-function BarcodePreview({
-  variant,
-  product,
-  svgRef,
-}: {
-  variant: ProductVariant;
-  product: ProductDraft;
-  svgRef: RefObject<SVGSVGElement | null>;
-}) {
-  useEffect(() => {
-    if (!svgRef.current) return;
-    JsBarcode(svgRef.current, variant.barcodeValue, {
-      format: "CODE128",
-      background: "#ffffff",
-      lineColor: "#111111",
-      width: 1.45,
-      height: 68,
-      margin: 10,
-      displayValue: true,
-      font: "monospace",
-      fontSize: 12,
-    });
-  }, [variant]);
-  return (
-    <article className="barcode-label">
-      <div className="barcode-label__header">
-        <span className="brand-word">ROXWANA</span>
-        <small>WEAR THE ROCK</small>
-      </div>
-      <strong>{product.name}</strong>
-      <span>{COLOR_CATALOG[variant.colorCode].name} · Talle {variant.sizeCode}</span>
-      <svg ref={svgRef} />
-    </article>
-  );
-}
-
-export function BarcodeView() {
-  const draft = useProductStore((state) => state.draft);
-  const [selectedSku, setSelectedSku] = useState(draft.variants[0]?.sku ?? "");
-  const [notice, setNotice] = useState("");
-  const barcodeSvgRef = useRef<SVGSVGElement>(null);
-  const selected = draft.variants.find((variant) => variant.sku === selectedSku) ?? draft.variants[0];
-
-  const exportBarcode = async () => {
-    if (!selected || !barcodeSvgRef.current) return;
-    const svg = new XMLSerializer().serializeToString(barcodeSvgRef.current);
-    const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const image = document.createElement("img");
-    image.src = url;
-    await image.decode();
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(800, image.naturalWidth * 3);
-    canvas.height = Math.max(300, image.naturalHeight * 3);
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    URL.revokeObjectURL(url);
-    await saveBarcodeFiles(draft.modelCode, selected.sku, svg, canvas.toDataURL("image/png"));
-    setNotice("SVG y PNG guardados");
-    window.setTimeout(() => setNotice(""), 2200);
-  };
-
-  return (
-    <div className="page">
-      {notice && <div className="toast"><CheckCircle2 size={17} />{notice}</div>}
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">Etiquetas internas</span>
-          <h1>Códigos de barras</h1>
-          <p>Code 128 basado en el SKU completo. Sin EAN externo en esta versión.</p>
-        </div>
-        <Button variant="primary" onClick={() => window.print()}>
-          <Printer size={17} /> Imprimir etiqueta
-        </Button>
-      </div>
-      <div className="barcode-workspace">
-        <Panel title="Variantes" eyebrow={draft.modelCode} icon={<Barcode size={18} />}>
-          <div className="barcode-variant-list">
-            {draft.variants.map((variant) => (
-              <button
-                className={variant.sku === selected?.sku ? "active" : ""}
-                key={variant.sku}
-                onClick={() => setSelectedSku(variant.sku)}
-              >
-                <span>
-                  <strong>{variant.sizeCode} · {variant.colorCode}</strong>
-                  <code>{variant.sku}</code>
-                </span>
-                <em>{variant.stock} u.</em>
-              </button>
-            ))}
-          </div>
-        </Panel>
-        <Panel title="Vista de impresión" eyebrow="Etiqueta 70 × 40 mm">
-          {selected ? (
-            <BarcodePreview variant={selected} product={draft} svgRef={barcodeSvgRef} />
-          ) : (
-            <p>Sin variantes.</p>
-          )}
-          <div className="barcode-actions">
-            <Button onClick={() => navigator.clipboard.writeText(selected?.sku ?? "")}>
-              <Copy size={15} /> Copiar SKU
-            </Button>
-            <Button variant="primary" onClick={() => window.print()}>
-              <Printer size={15} /> Imprimir
-            </Button>
-            <Button variant="primary" onClick={exportBarcode}>
-              <Download size={15} /> Guardar SVG + PNG
-            </Button>
-          </div>
-        </Panel>
-      </div>
-    </div>
-  );
-}
-
-export function ExportView({ appMode }: { appMode: "desktop" | "browser" }) {
-  const { draft, folderPath, setFolderPath } = useProductStore();
-  const [notice, setNotice] = useState("");
-  const sheet = useMemo(() => makeProductSheet(draft), [draft]);
-  const issues = useMemo(() => validateProduct(draft), [draft]);
-  const errors = issues.filter((issue) => issue.severity === "error");
-
-  const run = async (action: "copy" | "folder" | "txt" | "json") => {
-    try {
-      if (action === "copy") await navigator.clipboard.writeText(sheet);
-      if (action === "folder") {
-        const result = await createProductFolder(draft, sheet);
-        setFolderPath(result.folderPath);
-      }
-      if (action === "txt") await saveProductFiles(draft, sheet);
-      if (action === "json") exportProductJson(draft);
-      setNotice("Acción completada");
-    } catch {
-      setNotice("No se pudo completar la acción");
-    }
-    window.setTimeout(() => setNotice(""), 2200);
-  };
-
-  return (
-    <div className="page">
-      {notice && <div className="toast"><CheckCircle2 size={17} />{notice}</div>}
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">Salida para Product Studio</span>
-          <h1>Exportar ficha</h1>
-          <p>Revisión final del modelo, variantes, imágenes y archivos locales.</p>
-        </div>
-        <Button variant="primary" disabled={errors.length > 0} onClick={() => run("txt")}>
-          <Download size={17} /> Guardar .txt
-        </Button>
-      </div>
-      <div className="export-layout">
-        <Panel title="ROXWANA Product Sheet v1" eyebrow={draft.modelCode} icon={<FileCheck2 size={18} />}>
-          <pre className="export-sheet">{sheet}</pre>
-          <div className="export-actions">
-            <Button onClick={() => run("copy")}><Copy size={15} /> Copiar texto</Button>
-            <Button onClick={() => run("json")}><Download size={15} /> Producto JSON</Button>
-            <Button variant="primary" disabled={errors.length > 0} onClick={() => run("txt")}>
-              <FileOutput size={15} /> Guardar ficha
-            </Button>
-          </div>
-        </Panel>
-        <div className="export-side">
-          <Panel title="Validación" eyebrow="Antes de exportar">
-            <div className="validation-list">
-              {issues.length ? (
-                issues.map((issue, index) => (
-                  <div key={`${issue.field}-${index}`} className={issue.severity}>
-                    {issue.severity === "error" ? <AlertTriangle size={16} /> : <Settings2 size={16} />}
-                    <span><strong>{issue.field}</strong><small>{issue.message}</small></span>
-                  </div>
-                ))
-              ) : (
-                <div className="success">
-                  <CheckCircle2 size={17} />
-                  <span><strong>Producto listo</strong><small>No hay bloqueos de exportación.</small></span>
-                </div>
-              )}
-            </div>
-          </Panel>
-          <Panel title="Carpeta local" eyebrow={appMode === "desktop" ? "Sistema de archivos" : "Vista web"}>
-            <div className="folder-preview">
-              <Folder size={28} />
-              <strong>{folderPath || `product-files/${draft.modelCode}`}</strong>
-              <code>ficha / imagenes / estampas / mockups / codigos-barra / notas</code>
-              <Button onClick={() => run("folder")}>
-                <Folder size={15} /> Crear estructura
-              </Button>
-              {folderPath && appMode === "desktop" && (
-                <Button variant="primary" onClick={() => openProductFolder(folderPath)}>
-                  <ExternalLink size={15} /> Abrir carpeta
-                </Button>
-              )}
-            </div>
-          </Panel>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function HistoryView({
   products,
   onOpen,
@@ -593,42 +521,139 @@ export function HistoryView({
   products: ProductDraft[];
   onOpen: (product: ProductDraft) => void;
 }) {
-  const timeline = [...products].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<"all" | "draft" | "no_stock" | "active">("all");
+  const [copiedCode, setCopiedCode] = useState("");
+
+  const totalStock = (product: ProductDraft) =>
+    product.variants.reduce((sum, variant) => sum + variant.stock, 0);
+
+  const timeline = [...products]
+    .filter((product) => {
+      if (filter === "draft" && product.status !== "draft") return false;
+      if (filter === "no_stock" && totalStock(product) > 0) return false;
+      if (filter === "active" && (product.status === "draft" || totalStock(product) <= 0)) return false;
+      const haystack = `${product.name} ${product.modelCode} ${product.status} ${product.category}`.toLowerCase();
+      return haystack.includes(query.toLowerCase());
+    })
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  const copyCode = (code: string) => {
+    if (!code) return;
+    void navigator.clipboard.writeText(code);
+    setCopiedCode(code);
+    window.setTimeout(() => setCopiedCode((current) => (current === code ? "" : current)), 1800);
+  };
+
+  const filterOptions = [
+    ["all", "Todos", products.length],
+    ["draft", "Borradores", products.filter((product) => product.status === "draft").length],
+    ["no_stock", "Sin stock", products.filter((product) => totalStock(product) <= 0).length],
+    ["active", "Activos", products.filter((product) => product.status !== "draft" && totalStock(product) > 0).length],
+  ] as const;
+
   return (
     <div className="page">
+      {copiedCode && (
+        <div className="toast">
+          <Copy size={17} />
+          Codigo copiado: {copiedCode}
+        </div>
+      )}
       <div className="page-heading">
         <div>
           <span className="eyebrow">Registro local</span>
           <h1>Historial</h1>
-          <p>Últimos productos guardados y modificados.</p>
+          <p>Actividad reciente, recuperacion rapida y seguimiento de productos guardados.</p>
+        </div>
+        <Button variant="primary" onClick={() => onOpen(timeline[0])} disabled={!timeline.length}>
+          <ArrowRight size={16} /> Abrir ultimo
+        </Button>
+      </div>
+
+      <div className="history-toolbar">
+        <div className="search-field">
+          <Search size={17} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filtrar por nombre, codigo, estado o categoria..."
+          />
+        </div>
+        <div className="history-filter-tabs" aria-label="Filtros de historial">
+          {filterOptions.map(([id, label, count]) => (
+            <button
+              type="button"
+              key={id}
+              className={filter === id ? "active" : ""}
+              onClick={() => setFilter(id)}
+            >
+              <span>{label}</span>
+              <strong>{count}</strong>
+            </button>
+          ))}
         </div>
       </div>
-      <Panel title="Actividad" eyebrow={`${timeline.length} elementos`}>
+
+      <Panel title="Actividad de productos" eyebrow={`${timeline.length} resultados`} icon={<Database size={18} />}>
         {timeline.length ? (
-          <div className="timeline">
-            {timeline.map((product) => (
-              <button key={product.id} onClick={() => onOpen(product)}>
-                <i />
-                <span>
-                  <strong>{product.name}</strong>
-                  <small>
-                    {new Date(product.updatedAt).toLocaleString("es-AR")} · {product.modelCode}
-                  </small>
-                </span>
-                <StatusDot status={product.status === "draft" ? "warning" : "success"}>
-                  {product.status}
-                </StatusDot>
-              </button>
-            ))}
+          <div className="history-list">
+            {timeline.map((product) => {
+              const stock = totalStock(product);
+              return (
+                <article key={product.id} className="history-item">
+                  <div className="history-item__mark">
+                    <i className={stock <= 0 ? "warning" : product.status === "draft" ? "draft" : "ready"} />
+                  </div>
+                  <div className="history-item__main">
+                    <div className="history-item__title">
+                      <span>
+                        <strong>{product.name || "Producto sin nombre"}</strong>
+                        <small>Modificado {new Date(product.updatedAt).toLocaleString("es-AR")}</small>
+                      </span>
+                      <StatusDot status={product.status === "draft" ? "warning" : stock <= 0 ? "danger" : "success"}>
+                        {stock <= 0 ? "sin stock" : product.status}
+                      </StatusDot>
+                    </div>
+                    <div className="history-code-row">
+                      <code>{product.modelCode || "Codigo pendiente"}</code>
+                      <button
+                        type="button"
+                        onClick={() => copyCode(product.modelCode)}
+                        disabled={!product.modelCode}
+                        title="Copiar codigo"
+                      >
+                        <Copy size={13} />
+                      </button>
+                    </div>
+                    <div className="history-meta">
+                      <span>{formatPrice(product.price)}</span>
+                      <span>{product.variants.length} variantes</span>
+                      <span>{stock} unidades</span>
+                      <span>{product.colors.length} colores</span>
+                      <span>Creado {new Date(product.createdAt).toLocaleDateString("es-AR")}</span>
+                    </div>
+                  </div>
+                  <div className="history-item__actions">
+                    <Button size="sm" onClick={() => onOpen(product)}>
+                      Editar <ArrowRight size={14} />
+                    </Button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         ) : (
-          <EmptyState icon={<Database />} title="Historial vacío" description="Los borradores guardados aparecerán acá." />
+          <EmptyState
+            icon={<Database />}
+            title={products.length ? "Sin coincidencias" : "Historial vacio"}
+            description={products.length ? "Cambia el filtro o la busqueda para ver mas actividad." : "Los productos guardados apareceran aca."}
+          />
         )}
       </Panel>
     </div>
   );
 }
-
 export function SettingsView({ appMode }: { appMode: "desktop" | "browser" }) {
   const { settings, setSettings } = useProductStore();
   const [form, setForm] = useState<AppSettings>(settings);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import JsBarcode from "jsbarcode";
 import {
   Barcode,
@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Copy,
+  Download,
   Eye,
   File,
   FileOutput,
@@ -17,6 +18,7 @@ import {
   MicOff,
   Minimize2,
   Plus,
+  Printer,
   RefreshCw,
   Save,
   Send,
@@ -35,6 +37,7 @@ import {
   type ColorCode,
   type ProductDraft,
   type ProductImage,
+  type ProductVariant,
   type SizeCode,
 } from "../../types/product";
 import {
@@ -47,10 +50,12 @@ import {
 import { useProductStore } from "../../store/useProductStore";
 import {
   checkWhisperStatus,
+  exportProductJson,
   isTauri,
   listProducts,
   openProductFolder,
   persistProductImage,
+  saveBarcodeFiles,
   saveProduct,
   saveProductPackage,
   saveProductFiles,
@@ -91,6 +96,30 @@ const formatPrice = (value: number) =>
     maximumFractionDigits: 0,
   }).format(value || 0);
 
+const PRODUCT_NAME_SUGGESTIONS = [
+  "Remera blanca lisa",
+  "Remera negra lisa",
+  "Remera negra estampada",
+  "Remera blanca estampada",
+  "Remera oversize negra",
+  "Remera oversize blanca",
+  "Buzo negro liso",
+  "Buzo negro estampado",
+  "Campera negra urbana",
+  "Gorra negra bordada",
+];
+
+const MATERIAL_OPTIONS = [
+  "Algodón",
+  "Algodón peinado",
+  "Mezcla algodón/poliéster",
+  "Poliéster",
+  "Frisa",
+  "Jersey",
+  "Modal",
+  "Denim",
+];
+
 function FieldShell({
   label,
   field,
@@ -122,6 +151,43 @@ function FieldShell({
       </span>
       {children}
     </label>
+  );
+}
+
+function BarcodeLabel({
+  variant,
+  product,
+  svgRef,
+}: {
+  variant: ProductVariant;
+  product: ProductDraft;
+  svgRef: RefObject<SVGSVGElement | null>;
+}) {
+  useEffect(() => {
+    if (!svgRef.current) return;
+    JsBarcode(svgRef.current, variant.barcodeValue, {
+      format: "CODE128",
+      background: "#ffffff",
+      lineColor: "#111111",
+      width: 1.45,
+      height: 68,
+      margin: 10,
+      displayValue: true,
+      font: "monospace",
+      fontSize: 12,
+    });
+  }, [variant, svgRef]);
+
+  return (
+    <article className="barcode-label">
+      <div className="barcode-label__header">
+        <span className="brand-word">ROXWANA</span>
+        <small>WEAR THE ROCK</small>
+      </div>
+      <strong>{product.name || product.modelCode || "Producto ROXWANA"}</strong>
+      <span>{COLOR_CATALOG[variant.colorCode].name} - Talle {variant.sizeCode}</span>
+      <svg ref={svgRef} />
+    </article>
   );
 }
 
@@ -160,6 +226,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [knownModelCodes, setKnownModelCodes] = useState<string[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [galleryExpanded, setGalleryExpanded] = useState(false);
+  const [barcodeOpen, setBarcodeOpen] = useState(false);
+  const [selectedBarcodeSku, setSelectedBarcodeSku] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -171,6 +239,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const chatEnd = useRef<HTMLDivElement>(null);
   const chatBox = useRef<HTMLDivElement>(null);
   const barcodeRef = useRef<SVGSVGElement>(null);
+  const barcodePrintRef = useRef<SVGSVGElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -198,6 +267,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const errors = issues.filter((issue) => issue.severity === "error");
   const ollamaConnected = ollamaState === "ready";
   const selectedVariant = draft.variants[0];
+  const selectedBarcodeVariant =
+    draft.variants.find((variant) => variant.sku === selectedBarcodeSku) ?? selectedVariant;
   const completionFields = [
     Boolean(draft.garmentType),
     Boolean(draft.name.trim()),
@@ -302,6 +373,17 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       displayValue: false,
     });
   }, [selectedVariant?.barcodeValue]);
+
+  useEffect(() => {
+    if (!draft.variants.length) {
+      setSelectedBarcodeSku("");
+      setBarcodeOpen(false);
+      return;
+    }
+    if (!draft.variants.some((variant) => variant.sku === selectedBarcodeSku)) {
+      setSelectedBarcodeSku(draft.variants[0].sku);
+    }
+  }, [draft.variants, selectedBarcodeSku]);
 
   useEffect(
     () => () => {
@@ -743,6 +825,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       setLastSavedFolder(packageResult.folderPath);
       setPreviewOpen(false);
       setGalleryExpanded(false);
+      setBarcodeOpen(false);
       setDetailsOpen(true);
       imageFiles.current.clear();
       resetDraft();
@@ -799,6 +882,59 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     }
   };
 
+  const handleExportJson = () => {
+    if (!draft.modelCode) {
+      notify("Todavia no hay un codigo de producto para exportar.");
+      return;
+    }
+    exportProductJson(draft);
+    notify("Producto JSON exportado");
+  };
+
+  const handlePrintSheet = () => {
+    setBarcodeOpen(false);
+    window.print();
+  };
+
+  const exportSelectedBarcode = async () => {
+    if (!selectedBarcodeVariant || !barcodePrintRef.current) {
+      notify("Todavia no hay una etiqueta para guardar.");
+      return;
+    }
+    if (!draft.modelCode) {
+      notify("Primero hace falta generar el codigo del producto.");
+      return;
+    }
+    setActionBusy("barcode");
+    try {
+      const svg = new XMLSerializer().serializeToString(barcodePrintRef.current);
+      const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+      const image = document.createElement("img");
+      image.src = url;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(800, image.naturalWidth * 3);
+      canvas.height = Math.max(300, image.naturalHeight * 3);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("No pude preparar el PNG.");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      await saveBarcodeFiles(
+        draft.modelCode,
+        selectedBarcodeVariant.sku,
+        svg,
+        canvas.toDataURL("image/png"),
+      );
+      notify("Etiqueta guardada como SVG y PNG");
+    } catch {
+      notify("No pude guardar la etiqueta.");
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
   const updateColor = (color: ColorCode) =>
     setColors(
       draft.colors.includes(color)
@@ -821,6 +957,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     resetDraft();
     setPreviewOpen(false);
     setGalleryExpanded(false);
+    setBarcodeOpen(false);
     setDetailsOpen(true);
     setDraftOpen(false);
     notify("Ficha descartada");
@@ -832,6 +969,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     resetDraft();
     setPreviewOpen(false);
     setGalleryExpanded(false);
+    setBarcodeOpen(false);
     setDetailsOpen(true);
     setDraftOpen(true);
   };
@@ -1133,7 +1271,16 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
             <div className="creator-fields">
               <FieldShell label="Nombre del producto" field="name" onSuggest={suggestField} busy={fieldBusy}>
-                <input value={draft.name} onChange={(event) => patchDraft({ name: event.target.value })} />
+                <input
+                  value={draft.name}
+                  list="product-name-suggestions"
+                  onChange={(event) => patchDraft({ name: event.target.value })}
+                />
+                <datalist id="product-name-suggestions">
+                  {PRODUCT_NAME_SUGGESTIONS.map((name) => (
+                    <option value={name} key={name} />
+                  ))}
+                </datalist>
               </FieldShell>
 
               <div className="creator-field-row">
@@ -1218,8 +1365,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               <FieldShell label="Material" field="material" onSuggest={suggestField} busy={fieldBusy}>
                 <input
                   value={draft.material}
+                  list="material-options"
                   onChange={(event) => patchDraft({ material: event.target.value })}
                 />
+                <datalist id="material-options">
+                  {MATERIAL_OPTIONS.map((material) => (
+                    <option value={material} key={material} />
+                  ))}
+                </datalist>
               </FieldShell>
 
               <div className="creator-field-row">
@@ -1356,9 +1509,23 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                   <small>Generados automáticamente</small>
                 </span>
               </div>
-              <StatusDot status={errors.length ? "warning" : "success"}>
-                {errors.length ? "Revisar" : "Válido"}
-              </StatusDot>
+              <div className="section-title-actions">
+                <Button
+                  size="sm"
+                  disabled={!selectedVariant}
+                  onClick={() => {
+                    if (selectedVariant) {
+                      setSelectedBarcodeSku(selectedVariant.sku);
+                      setBarcodeOpen(true);
+                    }
+                  }}
+                >
+                  <Maximize2 size={14} /> Ver etiqueta
+                </Button>
+                <StatusDot status={errors.length ? "warning" : "success"}>
+                  {errors.length ? "Revisar" : "Válido"}
+                </StatusDot>
+              </div>
             </div>
             <div className="sku-code">
               <span>SKU principal</span>
@@ -1596,6 +1763,91 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         </div>
       )}
 
+      {barcodeOpen && (
+        <div className="barcode-print-backdrop" onMouseDown={() => setBarcodeOpen(false)}>
+          <section className="barcode-print-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span className="eyebrow">Etiquetas del producto</span>
+                <h2>Codigos de barras - {draft.modelCode || "sin codigo"}</h2>
+                <p>Elegis la variante, revisas la etiqueta y la imprimis desde este producto.</p>
+              </div>
+              <button
+                type="button"
+                className="image-manager-close"
+                onClick={() => setBarcodeOpen(false)}
+                title="Volver a la ficha"
+              >
+                <Minimize2 size={18} />
+              </button>
+            </header>
+
+            <div className="barcode-print-content">
+              <aside className="barcode-print-variants">
+                {draft.variants.length ? (
+                  draft.variants.map((variant) => (
+                    <button
+                      type="button"
+                      className={variant.sku === selectedBarcodeVariant?.sku ? "active" : ""}
+                      key={variant.sku}
+                      onClick={() => setSelectedBarcodeSku(variant.sku)}
+                    >
+                      <span>
+                        <strong>{variant.sizeCode} - {variant.colorCode}</strong>
+                        <code>{variant.sku}</code>
+                      </span>
+                      <em>{variant.stock} u.</em>
+                    </button>
+                  ))
+                ) : (
+                  <div className="sku-placeholder">
+                    <Barcode size={24} />
+                    <span>Elegi tipo de producto, color y talle para generar variantes.</span>
+                  </div>
+                )}
+              </aside>
+
+              <main className="barcode-print-preview">
+                {selectedBarcodeVariant ? (
+                  <BarcodeLabel
+                    variant={selectedBarcodeVariant}
+                    product={draft}
+                    svgRef={barcodePrintRef}
+                  />
+                ) : (
+                  <div className="sku-placeholder">
+                    <Barcode size={24} />
+                    <span>Todavia no hay etiqueta para mostrar.</span>
+                  </div>
+                )}
+                <div className="barcode-actions">
+                  <Button onClick={() => void navigator.clipboard.writeText(selectedBarcodeVariant?.sku ?? "")}>
+                    <Copy size={15} /> Copiar SKU
+                  </Button>
+                  <Button variant="primary" disabled={!selectedBarcodeVariant} onClick={() => window.print()}>
+                    <Printer size={15} /> Imprimir
+                  </Button>
+                  <Button
+                    variant="primary"
+                    loading={actionBusy === "barcode"}
+                    disabled={!selectedBarcodeVariant}
+                    onClick={exportSelectedBarcode}
+                  >
+                    <Download size={15} /> Guardar SVG + PNG
+                  </Button>
+                </div>
+              </main>
+            </div>
+
+            <footer>
+              <Button onClick={() => setBarcodeOpen(false)}>
+                <Minimize2 size={16} /> Volver a la ficha
+              </Button>
+            </footer>
+          </section>
+        </div>
+      )}
+
       {previewOpen && (
         <div className="preview-backdrop" onMouseDown={() => setPreviewOpen(false)}>
           <section className="product-preview" onMouseDown={(event) => event.stopPropagation()}>
@@ -1630,21 +1882,44 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               <div className="preview-sheet">
                 <div>
                   <strong>Product Sheet v1</strong>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(sheet);
-                      notify("Ficha copiada");
-                    }}
-                  >
-                    <Copy size={14} /> Copiar
-                  </button>
+                  <div className="preview-sheet-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(sheet);
+                        notify("Ficha copiada");
+                      }}
+                    >
+                      <Copy size={14} /> Copiar
+                    </button>
+                    <button type="button" onClick={handlePrintSheet}>
+                      <Printer size={14} /> Imprimir
+                    </button>
+                    <button type="button" onClick={handleExportJson}>
+                      <Download size={14} /> JSON
+                    </button>
+                    <button
+                      type="button"
+                      disabled={errors.length > 0 || actionBusy === "export"}
+                      onClick={handleExport}
+                    >
+                      <FileOutput size={14} /> Guardar ficha
+                    </button>
+                  </div>
                 </div>
                 <pre>{sheet}</pre>
               </div>
             </div>
             <footer>
               <Button onClick={() => setPreviewOpen(false)}>Seguir editando</Button>
+              <Button loading={actionBusy === "folder"} onClick={handleCreateFolder}>
+                <FolderPlus size={16} /> Crear carpeta
+              </Button>
+              {folderPath && (
+                <Button onClick={() => openProductFolder(folderPath)}>
+                  <FolderPlus size={16} /> Abrir carpeta
+                </Button>
+              )}
               <Button variant="primary" onClick={handleSave}>
                 <Save size={16} /> Guardar producto
               </Button>

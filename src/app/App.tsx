@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   Archive,
-  Barcode,
   Boxes,
   ChevronDown,
-  FileOutput,
   FolderClock,
   Gauge,
   History,
@@ -21,9 +19,7 @@ import { useProductStore } from "../store/useProductStore";
 import type { ProductDraft } from "../types/product";
 import Studio from "../features/studio/Studio";
 import {
-  BarcodeView,
   DashboardView,
-  ExportView,
   HistoryView,
   ProductsView,
   SearchView,
@@ -35,8 +31,6 @@ export type AppView =
   | "studio"
   | "products"
   | "search"
-  | "barcodes"
-  | "export"
   | "history"
   | "settings";
 
@@ -49,8 +43,6 @@ const navigation: Array<{
   { id: "studio", label: "Crear producto", icon: PackagePlus },
   { id: "products", label: "Productos", icon: Boxes },
   { id: "search", label: "Buscador", icon: Search },
-  { id: "barcodes", label: "Códigos de barras", icon: Barcode },
-  { id: "export", label: "Exportar ficha", icon: FileOutput },
   { id: "history", label: "Historial", icon: History },
   { id: "settings", label: "Ajustes", icon: Settings },
 ];
@@ -108,10 +100,6 @@ function App() {
         return <ProductsView products={products} onOpen={openProduct} onRefresh={refreshProducts} />;
       case "search":
         return <SearchView onOpen={openProduct} />;
-      case "barcodes":
-        return <BarcodeView />;
-      case "export":
-        return <ExportView appMode={appMode} />;
       case "history":
         return <HistoryView products={products} onOpen={openProduct} />;
       case "settings":
