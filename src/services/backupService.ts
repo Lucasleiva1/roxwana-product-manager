@@ -46,10 +46,10 @@ async function callBackupApi<T>(path: string, payload: Record<string, unknown>):
 }
 
 export async function getBackupStatus(backupRoot?: string): Promise<BackupStatus> {
+  if (isTauri()) return invoke<BackupStatus>("backup_status", { backupRoot: backupRoot || null });
   try {
     return await callBackupApi<BackupStatus>("/api/backup/status", { backupRoot: backupRoot || null });
   } catch (apiError) {
-    if (isTauri()) return invoke<BackupStatus>("backup_status", { backupRoot: backupRoot || null });
     return {
       ...desktopOnlyStatus,
       message: apiError instanceof Error ? apiError.message : desktopOnlyStatus.message,
@@ -58,15 +58,15 @@ export async function getBackupStatus(backupRoot?: string): Promise<BackupStatus
 }
 
 export async function runBackup(backupRoot?: string, reason = "manual"): Promise<BackupOperationResult> {
+  if (isTauri()) {
+    return invoke<BackupOperationResult>("run_backup", { backupRoot: backupRoot || null, reason });
+  }
   try {
     return await callBackupApi<BackupOperationResult>("/api/backup/run", {
       backupRoot: backupRoot || null,
       reason,
     });
   } catch (apiError) {
-    if (isTauri()) {
-      return invoke<BackupOperationResult>("run_backup", { backupRoot: backupRoot || null, reason });
-    }
     return {
       status: {
         ...desktopOnlyStatus,
@@ -80,10 +80,10 @@ export async function runBackup(backupRoot?: string, reason = "manual"): Promise
 }
 
 export async function restoreBackup(backupRoot?: string): Promise<BackupOperationResult> {
+  if (isTauri()) return invoke<BackupOperationResult>("restore_backup", { backupRoot: backupRoot || null });
   try {
     return await callBackupApi<BackupOperationResult>("/api/backup/restore", { backupRoot: backupRoot || null });
   } catch (apiError) {
-    if (isTauri()) return invoke<BackupOperationResult>("restore_backup", { backupRoot: backupRoot || null });
     return {
       status: {
         ...desktopOnlyStatus,

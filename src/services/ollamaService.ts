@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import {
   COLOR_CATALOG,
   GARMENT_TYPES,
@@ -10,6 +11,7 @@ import {
   type ProductDraft,
 } from "../types/product";
 import { parseNaturalBrief } from "../lib/productLogic";
+import { isTauri } from "./desktopService";
 
 export interface OllamaStatus {
   connected: boolean;
@@ -43,13 +45,37 @@ function resolveOllamaEndpoint(endpoint: string) {
   return isTauri ? endpoint.replace(/\/$/, "") : "/ollama";
 }
 
+function parseRequestBody(body: RequestInit["body"] | undefined) {
+  if (!body) return null;
+  if (typeof body !== "string") {
+    throw new Error("El puente local de Ollama solo acepta cuerpos JSON.");
+  }
+  return JSON.parse(body);
+}
+
+async function requestOllamaJson<T>(
+  endpoint: string,
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  if (isTauri()) {
+    return invoke<T>("ollama_request", {
+      endpoint,
+      path,
+      method: options.method || "GET",
+      body: parseRequestBody(options.body),
+    });
+  }
+  const response = await fetch(`${resolveOllamaEndpoint(endpoint)}${path}`, options);
+  if (!response.ok) throw new Error(`Ollama respondió ${response.status}`);
+  return response.json() as Promise<T>;
+}
+
 export async function checkOllamaStatus(endpoint = "http://localhost:11434"): Promise<OllamaStatus> {
   try {
-    const response = await fetch(`${resolveOllamaEndpoint(endpoint)}/api/tags`, {
+    const data = await requestOllamaJson<{ models?: Array<{ name: string }> }>(endpoint, "/api/tags", {
       signal: AbortSignal.timeout(5000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = (await response.json()) as { models?: Array<{ name: string }> };
     return {
       connected: true,
       models: data.models?.map((model) => model.name) ?? [],
@@ -69,7 +95,7 @@ export async function listLocalModels(endpoint?: string) {
 
 export async function warmOllamaModel(settings: AppSettings) {
   if (!settings.ollamaModel) throw new Error("No hay un modelo de Ollama seleccionado.");
-  const response = await fetch(`${resolveOllamaEndpoint(settings.ollamaEndpoint)}/api/generate`, {
+  await requestOllamaJson(settings.ollamaEndpoint, "/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -81,7 +107,6 @@ export async function warmOllamaModel(settings: AppSettings) {
     }),
     signal: AbortSignal.timeout(180000),
   });
-  if (!response.ok) throw new Error(`Ollama respondió ${response.status}`);
 }
 
 function compactProduct(product: ProductDraft) {
@@ -379,7 +404,7 @@ async function ollamaJson<T>(
   format: "json" | undefined = "json",
   images: string[] = [],
 ): Promise<T> {
-  const response = await fetch(`${resolveOllamaEndpoint(settings.ollamaEndpoint)}/api/generate`, {
+  const payload = await requestOllamaJson<{ response: string }>(settings.ollamaEndpoint, "/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -398,8 +423,6 @@ async function ollamaJson<T>(
     }),
     signal: AbortSignal.timeout(180000),
   });
-  if (!response.ok) throw new Error(`Ollama respondió ${response.status}`);
-  const payload = (await response.json()) as { response: string };
   const cleaned = payload.response
     .trim()
     .replace(/^```(?:json)?\s*/i, "")

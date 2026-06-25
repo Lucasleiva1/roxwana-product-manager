@@ -47,6 +47,7 @@ import {
   deleteProduct,
   listProducts,
   openProductPackageFolder,
+  restartApp,
   searchProducts,
 } from "../../services/desktopService";
 import {
@@ -1422,15 +1423,37 @@ export function SettingsView({
     models: [],
   });
   const [saved, setSaved] = useState(false);
+  const [restartBusy, setRestartBusy] = useState(false);
+  const [settingsMessage, setSettingsMessage] = useState("");
   const selectableModels = useMemo(() => {
     const names = new Set([...ollama.models, ...RECOMMENDED_OLLAMA_MODELS.map((model) => model.name)]);
     return [...names];
   }, [ollama.models]);
+  const selectedModelReady = Boolean(form.ollamaModel && ollama.models.includes(form.ollamaModel));
 
   const modelLabel = (name: string) => {
     const known = RECOMMENDED_OLLAMA_MODELS.find((model) => model.name === name);
     if (!known) return name;
     return `${known.label} · ${known.kind === "cloud" ? "Cloud" : "Local"}`;
+  };
+  const defaultModelLabel = settings.ollamaModel ? modelLabel(settings.ollamaModel) : "Sin modelo";
+
+  const saveSettings = () => {
+    setSettings(form);
+    setSaved(true);
+    setSettingsMessage(`Predeterminado actual: ${form.ollamaModel ? modelLabel(form.ollamaModel) : "sin modelo"}.`);
+    window.setTimeout(() => setSaved(false), 2000);
+  };
+
+  const saveSettingsAndRestart = async () => {
+    setRestartBusy(true);
+    saveSettings();
+    try {
+      await restartApp();
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? error.message : "No pude reiniciar la app.");
+      setRestartBusy(false);
+    }
   };
 
   const testOllama = async () => {
@@ -1455,11 +1478,7 @@ export function SettingsView({
         </div>
         <Button
           variant="primary"
-          onClick={() => {
-            setSettings(form);
-            setSaved(true);
-            window.setTimeout(() => setSaved(false), 2000);
-          }}
+          onClick={saveSettings}
         >
           <FileCheck2 size={17} /> {saved ? "Guardado" : "Guardar ajustes"}
         </Button>
@@ -1566,6 +1585,16 @@ export function SettingsView({
               <StatusDot status={ollama.connected ? "success" : "warning"}>
                 {ollama.connected ? `${ollama.models.length} modelos disponibles` : "Ollama no detectado"}
               </StatusDot>
+              <StatusDot status={selectedModelReady ? "success" : "warning"}>
+                {selectedModelReady ? "Modelo seleccionado disponible" : "El modelo seleccionado no esta detectado"}
+              </StatusDot>
+              <p className="settings-note">Predeterminado actual: {defaultModelLabel}</p>
+              <div className="settings-actions">
+                <Button onClick={saveSettingsAndRestart} loading={restartBusy} disabled={!form.ollamaModel || restartBusy}>
+                  <RefreshCw size={15} /> Guardar modelo y reiniciar
+                </Button>
+              </div>
+              {settingsMessage && <p className="settings-note">{settingsMessage}</p>}
               <div className="model-catalog">
                 {RECOMMENDED_OLLAMA_MODELS.map((model) => (
                   <button

@@ -3887,6 +3887,12 @@ textarea:focus-visible {
   font-size: 8px;
 }
 
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .model-catalog {
   display: flex;
   flex-direction: column;

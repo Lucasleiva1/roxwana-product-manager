@@ -1,5 +1,4 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
 import type { AppSettings, ProductDraft, ProductImage } from "../types/product";
 
 declare global {
@@ -93,6 +92,14 @@ export async function initializeDesktop() {
   return invoke<{ databasePath: string }>("initialize_database");
 }
 
+export async function restartApp() {
+  if (isTauri()) {
+    await invoke<void>("restart_app");
+    return;
+  }
+  window.location.reload();
+}
+
 export async function saveProduct(product: ProductDraft) {
   if (isTauri()) {
     return invoke<{ folderPath: string }>("save_product", { product });
@@ -143,16 +150,12 @@ export async function deleteProduct(productId: string, modelCode?: string): Prom
   };
 
   if (isTauri()) {
-    try {
-      return await deleteViaDevServer();
-    } catch (error) {
-      await withTimeout(
-        invoke<void>("delete_product", { productId }),
-        30000,
-        "La eliminación tardó demasiado. Cerrá carpetas o archivos abiertos de ese producto e intentá de nuevo.",
-      );
-      return { folderDeleted: false, folderError: errorMessage(error, "No pude eliminar la carpeta del producto.") };
-    }
+    await withTimeout(
+      invoke<void>("delete_product", { productId }),
+      30000,
+      "La eliminacion tardo demasiado. Cerra carpetas o archivos abiertos de ese producto e intenta de nuevo.",
+    );
+    return { folderDeleted: true };
   }
   try {
     return await deleteViaDevServer();
@@ -228,18 +231,23 @@ async function postDevProductPackage(payload: ProductPackagePayload) {
 }
 
 export async function saveProductPackage(payload: ProductPackagePayload) {
-  try {
-    return await postDevProductPackage(payload);
-  } catch (devError) {
-    if (!isTauri()) throw devError;
+  if (isTauri()) {
     return invoke<{ folderPath: string }>("save_product_package", {
       payload: { ...payload, product: packageProduct(payload.product) },
     });
+  }
+  try {
+    return await postDevProductPackage(payload);
+  } catch (devError) {
+    throw devError;
   }
 }
 
 export async function savePrintFiles(modelCode: string, printFiles: ProductPackagePrintFile[]) {
   if (!printFiles.length) return { folderPath: "" };
+  if (isTauri()) {
+    return invoke<{ folderPath: string }>("save_print_files", { modelCode, printFiles });
+  }
   try {
     const response = await fetch("/api/product-print-files", {
       method: "POST",
@@ -250,24 +258,24 @@ export async function savePrintFiles(modelCode: string, printFiles: ProductPacka
   } catch {
     // Fall back to Tauri when the dev endpoint is not present.
   }
-  if (isTauri()) {
-    return invoke<{ folderPath: string }>("save_print_files", { modelCode, printFiles });
-  }
   return { folderPath: `Documentos/ROXWANA Product Manager/productos/${modelCode}/impresion/trabajos-para-impresion` };
 }
 
 export async function productPackageFolder(modelCode: string) {
+  if (isTauri()) return invoke<{ folderPath: string }>("product_package_folder", { modelCode });
   try {
     const response = await fetch(`/api/product-package-path?modelCode=${encodeURIComponent(modelCode)}`);
     if (response.ok) return (await response.json()) as { folderPath: string };
   } catch {
     // Packaged builds do not expose the dev endpoint.
   }
-  if (isTauri()) return invoke<{ folderPath: string }>("product_package_folder", { modelCode });
   return { folderPath: `Documentos/ROXWANA Product Manager/productos/${modelCode}` };
 }
 
 export async function openProductPackageFolder(modelCode: string) {
+  if (isTauri()) {
+    return invoke<{ folderPath: string }>("open_product_package_folder", { modelCode });
+  }
   try {
     const response = await fetch("/api/open-product-package", {
       method: "POST",
@@ -279,10 +287,6 @@ export async function openProductPackageFolder(modelCode: string) {
     // Fall back to Tauri opener when the dev endpoint is not present.
   }
   const result = await productPackageFolder(modelCode);
-  if (isTauri()) {
-    await openPath(result.folderPath);
-    return result;
-  }
   return result;
 }
 
@@ -302,7 +306,7 @@ export async function saveProductFiles(product: ProductDraft, productSheet: stri
 
 export async function openProductFolder(path: string) {
   if (!isTauri()) return false;
-  await openPath(path);
+  await invoke<void>("open_folder_path", { folderPath: path });
   return true;
 }
 

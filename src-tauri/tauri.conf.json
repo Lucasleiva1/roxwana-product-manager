@@ -30,7 +30,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "resources": {
       "resources/whisper/windows-x64/Release/*": "whisper/Release/",
       "resources/whisper/windows-x64/ggml-base-q5_1.bin": "whisper/ggml-base-q5_1.bin"
@@ -39,6 +39,10 @@
     "longDescription": "Aplicación interna para crear productos, variantes, códigos de barras, imágenes y fichas exportables.",
     "category": "Business",
     "windows": {
+      "nsis": {
+        "installerHooks": "windows/nsis-hooks.nsh",
+        "languages": ["Spanish"]
+      },
       "wix": {
         "language": "es-ES"
       }

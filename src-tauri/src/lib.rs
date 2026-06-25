@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     fs,
+    io::{Read, Write},
+    net::TcpStream,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 use tauri::{AppHandle, Manager};
 
@@ -292,6 +295,164 @@ fn decode_data_url(value: &str) -> Result<Vec<u8>, String> {
         .map(|(_, content)| content)
         .unwrap_or(value);
     BASE64.decode(encoded).map_err(|error| error.to_string())
+}
+
+fn open_folder_with_explorer(folder: &Path) -> Result<(), String> {
+    if !folder.exists() {
+        return Err(format!("La carpeta no existe: {}", folder.to_string_lossy()));
+    }
+    Command::new("explorer.exe")
+        .arg(folder)
+        .spawn()
+        .map_err(|error| format!("No pude abrir la carpeta '{}': {}", folder.to_string_lossy(), error))?;
+    Ok(())
+}
+
+fn parse_http_endpoint(endpoint: &str) -> Result<(String, u16, String), String> {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    let without_scheme = trimmed
+        .strip_prefix("http://")
+        .ok_or_else(|| "Ollama local debe usar una direccion http://, por ejemplo http://localhost:11434.".to_string())?;
+    let (host_port, base_path) = without_scheme
+        .split_once('/')
+        .map(|(host, path)| (host, format!("/{path}")))
+        .unwrap_or((without_scheme, String::new()));
+    let (host, port) = if let Some((host, port)) = host_port.rsplit_once(':') {
+        let parsed_port = port
+            .parse::<u16>()
+            .map_err(|_| format!("Puerto de Ollama invalido: {port}"))?;
+        (host.to_string(), parsed_port)
+    } else {
+        (host_port.to_string(), 80)
+    };
+    if host.trim().is_empty() {
+        return Err("Falta el host de Ollama.".to_string());
+    }
+    let host = if host.eq_ignore_ascii_case("localhost") {
+        "127.0.0.1".to_string()
+    } else {
+        host
+    };
+    Ok((host, port, base_path))
+}
+
+fn combine_http_path(base_path: &str, request_path: &str) -> String {
+    let request = if request_path.starts_with('/') {
+        request_path.to_string()
+    } else {
+        format!("/{request_path}")
+    };
+    if base_path.is_empty() || base_path == "/" {
+        request
+    } else {
+        format!("{}{}", base_path.trim_end_matches('/'), request)
+    }
+}
+
+fn find_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn decode_chunked_body(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let mut index = 0;
+    let mut decoded = Vec::new();
+    loop {
+        let size_end = bytes[index..]
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .map(|position| index + position)
+            .ok_or_else(|| "Respuesta chunked incompleta de Ollama.".to_string())?;
+        let size_line = String::from_utf8_lossy(&bytes[index..size_end]);
+        let size_hex = size_line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_hex, 16)
+            .map_err(|_| format!("Tamano chunked invalido de Ollama: {size_hex}"))?;
+        index = size_end + 2;
+        if size == 0 {
+            break;
+        }
+        if index + size > bytes.len() {
+            return Err("Respuesta chunked truncada de Ollama.".to_string());
+        }
+        decoded.extend_from_slice(&bytes[index..index + size]);
+        index += size;
+        if bytes.get(index..index + 2) == Some(b"\r\n") {
+            index += 2;
+        }
+    }
+    Ok(decoded)
+}
+
+fn request_ollama_json(
+    endpoint: &str,
+    request_path: &str,
+    method: &str,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    let (host, port, base_path) = parse_http_endpoint(endpoint)?;
+    let path = combine_http_path(&base_path, request_path);
+    let method = method.trim().to_uppercase();
+    if method != "GET" && method != "POST" {
+        return Err(format!("Metodo no soportado para Ollama: {method}"));
+    }
+
+    let body_bytes = match body {
+        Some(value) if !value.is_null() => serde_json::to_vec(&value).map_err(|error| error.to_string())?,
+        _ => Vec::new(),
+    };
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n"
+    )
+    .into_bytes();
+    if method == "POST" {
+        request.extend_from_slice(
+            format!(
+                "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                body_bytes.len()
+            )
+            .as_bytes(),
+        );
+    }
+    request.extend_from_slice(b"\r\n");
+    request.extend_from_slice(&body_bytes);
+
+    let mut stream = TcpStream::connect((host.as_str(), port))
+        .map_err(|error| format!("No pude conectar con Ollama en {host}:{port}: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(180)))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(10)))
+        .map_err(|error| error.to_string())?;
+    stream.write_all(&request).map_err(|error| error.to_string())?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).map_err(|error| error.to_string())?;
+    let header_end = find_header_end(&response).ok_or_else(|| "Respuesta HTTP invalida de Ollama.".to_string())?;
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .ok_or_else(|| "No pude leer el estado HTTP de Ollama.".to_string())?;
+    let mut body_bytes = response[header_end + 4..].to_vec();
+    if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+        body_bytes = decode_chunked_body(&body_bytes)?;
+    }
+    if !(200..300).contains(&status) {
+        let text = String::from_utf8_lossy(&body_bytes);
+        return Err(format!("Ollama respondio {status}: {}", text.trim()));
+    }
+    if body_bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_slice(&body_bytes).map_err(|error| {
+        format!(
+            "Ollama respondio, pero no pude leer JSON: {}. Respuesta: {}",
+            error,
+            String::from_utf8_lossy(&body_bytes).trim()
+        )
+    })
 }
 
 fn is_existing_dir(path: &Path) -> bool {
@@ -668,6 +829,15 @@ fn restore_backup(app: AppHandle, backup_root: Option<String>) -> Result<BackupO
 fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> {
     let input: ProductInput = serde_json::from_value(product.clone()).map_err(|error| error.to_string())?;
     let folder = product_folder(&app, &input.model_code)?;
+    create_folder_structure(&folder)?;
+    fs::write(
+        folder.join("ficha/product.json"),
+        serde_json::to_string_pretty(&product).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if !input.notes.trim().is_empty() {
+        fs::write(folder.join("notas/notas.txt"), &input.notes).map_err(|error| error.to_string())?;
+    }
     let connection = connection(&app)?;
     let transaction = connection.unchecked_transaction().map_err(|error| error.to_string())?;
 
@@ -1002,6 +1172,41 @@ fn product_package_folder(app: AppHandle, model_code: String) -> Result<FolderRe
 }
 
 #[tauri::command]
+fn open_product_package_folder(app: AppHandle, model_code: String) -> Result<FolderResult, String> {
+    let folder = product_folder(&app, &model_code)?;
+    create_folder_structure(&folder)?;
+    open_folder_with_explorer(&folder)?;
+    Ok(FolderResult {
+        folder_path: folder.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+fn open_folder_path(folder_path: String) -> Result<(), String> {
+    open_folder_with_explorer(&PathBuf::from(folder_path))
+}
+
+#[tauri::command]
+fn ollama_request(
+    endpoint: String,
+    path: String,
+    method: Option<String>,
+    body: Option<Value>,
+) -> Result<Value, String> {
+    request_ollama_json(&endpoint, &path, method.as_deref().unwrap_or("GET"), body)
+}
+
+#[tauri::command]
+fn restart_app(app: AppHandle) -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    Command::new(executable)
+        .spawn()
+        .map_err(|error| format!("No pude reiniciar ROXWANA: {error}"))?;
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
 fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<FolderResult, String> {
     let input: ProductInput =
         serde_json::from_value(payload.product.clone()).map_err(|error| error.to_string())?;
@@ -1223,7 +1428,11 @@ pub fn run() {
             save_barcode_files,
             save_print_files,
             product_package_folder,
+            open_product_package_folder,
+            open_folder_path,
             save_product_package,
+            ollama_request,
+            restart_app,
             transcribe_audio
         ])
         .setup(|app| {
