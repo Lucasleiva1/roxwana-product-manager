@@ -142,6 +142,13 @@ struct PackageBarcodeInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PackageWhatsAppImageInput {
+    original_name: String,
+    data_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ProductPackageInput {
     product: Value,
     product_sheet: String,
@@ -150,6 +157,7 @@ struct ProductPackageInput {
     barcodes: Vec<PackageBarcodeInput>,
     #[serde(default)]
     print_files: Vec<PackagePrintFileInput>,
+    whatsapp_image: Option<PackageWhatsAppImageInput>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -244,6 +252,7 @@ fn create_folder_structure(folder: &Path) -> Result<(), String> {
         "imagenes/originales",
         "imagenes/webp",
         "imagenes/aprobadas",
+        "imagenes/whatsapp",
         "estampas",
         "mockups",
         "codigos-barra",
@@ -1041,6 +1050,15 @@ fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<
             fs::copy(&webp_path, folder.join("imagenes/aprobadas").join(final_name))
                 .map_err(|error| error.to_string())?;
         }
+    }
+
+    if let Some(image) = payload.whatsapp_image {
+        let name = safe_file_name(&image.original_name, &format!("{}-whatsapp.jpg", input.model_code));
+        fs::write(
+            folder.join("imagenes").join("whatsapp").join(name),
+            decode_data_url(&image.data_url)?,
+        )
+        .map_err(|error| error.to_string())?;
     }
 
     for barcode in payload.barcodes {

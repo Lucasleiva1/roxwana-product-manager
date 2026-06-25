@@ -1,6 +1,6 @@
 [package]
 name = "roxwana-product-manager"
-version = "0.1.0"
+version = "0.2.1-prefinal.1"
 description = "ROXWANA Product Manager"
 authors = ["ROXWANA"]
 edition = "2021"
@@ -20,4 +20,3 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-

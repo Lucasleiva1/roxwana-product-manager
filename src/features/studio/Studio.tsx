@@ -69,6 +69,7 @@ import {
   type ProductPackageBarcode,
   type ProductPackageImage,
   type ProductPackagePrintFile,
+  type ProductPackageWhatsAppImage,
 } from "../../services/desktopService";
 import {
   checkOllamaStatus,
@@ -461,6 +462,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       reader.readAsDataURL(file);
     });
 
+  const blobAsDataUrl = (blob: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+
   const isPrintWorkFile = (file: File) =>
     /\.(ai|psd|psb|png|pdf|eps|svg|tif|tiff|jpg|jpeg|webp)$/i.test(file.name);
 
@@ -475,14 +484,6 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         };
       }),
     );
-
-  const blobAsDataUrl = (blob: Blob) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
 
   const fileAsWebpDataUrl = async (file: File) => {
     const bitmap = await createImageBitmap(file);
@@ -503,6 +504,67 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       ),
     );
     return blobAsDataUrl(blob);
+  };
+
+  const imageSourceAsDataUrl = async (image: ProductImage) => {
+    const file = imageFiles.current.get(image.id);
+    if (file) return fileAsDataUrl(file);
+    if (image.previewUrl?.startsWith("data:")) return image.previewUrl;
+    if (image.previewUrl) {
+      const response = await fetch(image.previewUrl);
+      if (!response.ok) throw new Error("No pude leer la imagen de portada.");
+      return blobAsDataUrl(await response.blob());
+    }
+    throw new Error("No pude encontrar la imagen de portada.");
+  };
+
+  const loadImageElement = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("No pude preparar la imagen de WhatsApp."));
+      image.src = src;
+    });
+
+  const buildWhatsappImage = async (product: ProductDraft): Promise<ProductPackageWhatsAppImage | undefined> => {
+    const coverImage = product.images.find((image) => image.imageNumber === 1) ?? product.images[0];
+    if (!coverImage || !product.modelCode) return undefined;
+
+    const sourceDataUrl = await imageSourceAsDataUrl(coverImage);
+    const source = await loadImageElement(sourceDataUrl);
+    const maxWidth = 1600;
+    const scale = Math.min(1, maxWidth / Math.max(1, source.naturalWidth || source.width));
+    const imageWidth = Math.max(1, Math.round((source.naturalWidth || source.width) * scale));
+    const imageHeight = Math.max(1, Math.round((source.naturalHeight || source.height) * scale));
+    const labelHeight = Math.max(140, Math.min(280, Math.round(imageHeight * 0.18)));
+    const canvas = document.createElement("canvas");
+    canvas.width = imageWidth;
+    canvas.height = imageHeight + labelHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("No pude generar la imagen de WhatsApp.");
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(source, 0, 0, imageWidth, imageHeight);
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, imageHeight, imageWidth, labelHeight);
+    context.fillStyle = "#111111";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.font = `700 ${Math.max(52, Math.min(120, Math.round(labelHeight * 0.48)))}px Arial, sans-serif`;
+    context.fillText(product.modelCode, imageWidth / 2, imageHeight + labelHeight / 2, imageWidth * 0.88);
+
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob(
+        (result) => (result ? resolve(result) : reject(new Error("No pude convertir la imagen de WhatsApp."))),
+        "image/jpeg",
+        0.92,
+      ),
+    );
+    return {
+      originalName: `${product.modelCode}-whatsapp.jpg`,
+      dataUrl: await blobAsDataUrl(blob),
+    };
   };
 
   const buildPackageImages = async (product: ProductDraft): Promise<ProductPackageImage[]> =>
@@ -894,6 +956,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         productSheet,
         webInfo: productWebInfo,
         images: await buildPackageImages(productToSave),
+        whatsappImage: await buildWhatsappImage(productToSave),
         barcodes: await buildPackageBarcodes(productToSave),
         printFiles: await buildPackagePrintFiles(),
       });
@@ -915,8 +978,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
           ? "Producto guardado con carpeta, imágenes y códigos. Ya podés crear otro."
           : "Producto guardado con carpeta, imágenes y códigos. Ya podés crear otro.",
       );
-    } catch {
-      notify("No pude guardar el producto");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "No pude guardar el producto");
     } finally {
       setActionBusy(null);
     }

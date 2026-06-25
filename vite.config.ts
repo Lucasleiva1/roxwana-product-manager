@@ -59,6 +59,7 @@ function createFolderStructure(folder: string) {
     "imagenes/originales",
     "imagenes/webp",
     "imagenes/aprobadas",
+    "imagenes/whatsapp",
     "estampas",
     "mockups",
     "codigos-barra",
@@ -92,6 +93,11 @@ function saveProductPackage(payload: any) {
     if (image.approved && existsSync(webpPath)) {
       copyFileSync(webpPath, join(folder, "imagenes", "aprobadas", finalName));
     }
+  }
+
+  if (payload.whatsappImage?.dataUrl) {
+    const name = safeName(payload.whatsappImage.originalName, `${modelCode}-whatsapp.jpg`);
+    writeDataUrl(join(folder, "imagenes", "whatsapp", name), payload.whatsappImage.dataUrl);
   }
 
   for (const barcode of payload.barcodes || []) {

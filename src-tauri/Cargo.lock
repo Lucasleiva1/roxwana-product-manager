@@ -2767,7 +2767,7 @@ dependencies = [
 
 [[package]]
 name = "roxwana-product-manager"
-version = "0.1.0"
+version = "0.2.1-prefinal.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",

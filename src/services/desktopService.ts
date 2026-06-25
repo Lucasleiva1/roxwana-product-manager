@@ -36,6 +36,11 @@ export interface ProductPackagePrintFile {
   dataUrl?: string;
 }
 
+export interface ProductPackageWhatsAppImage {
+  originalName: string;
+  dataUrl: string;
+}
+
 export interface ProductPackagePayload {
   product: ProductDraft;
   productSheet: string;
@@ -43,6 +48,7 @@ export interface ProductPackagePayload {
   images: ProductPackageImage[];
   barcodes: ProductPackageBarcode[];
   printFiles?: ProductPackagePrintFile[];
+  whatsappImage?: ProductPackageWhatsAppImage;
 }
 
 function readLocalProducts(): ProductDraft[] {
