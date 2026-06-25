@@ -75,6 +75,9 @@ const settingsFromStorage = (): AppSettings => {
     whisperModel: "base-q5_1",
     whisperLanguage: "es",
     creatorActionLabels: false,
+    backupEnabled: true,
+    backupFrequencyDays: 3,
+    backupRoot: "",
   };
   try {
     const stored = JSON.parse(localStorage.getItem("roxwana-settings-v1") || "{}");

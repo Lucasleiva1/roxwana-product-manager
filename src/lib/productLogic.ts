@@ -265,6 +265,28 @@ export function generateVariants(
   );
 }
 
+export function totalDefinedStock(product: Pick<ProductDraft, "variants">) {
+  return product.variants.reduce((sum, variant) => sum + Math.max(0, variant.stock), 0);
+}
+
+export function hasDefinedStock(product: Pick<ProductDraft, "variants">) {
+  return product.variants.some((variant) => variant.stock > 0);
+}
+
+export function hasSellableVariants(product: Pick<ProductDraft, "variants">) {
+  return product.variants.length > 0;
+}
+
+export function formatStockQuantity(stock: number) {
+  return stock > 0 ? `${stock} unidades` : "Indefinido";
+}
+
+export function formatStockSummary(product: Pick<ProductDraft, "variants">) {
+  const total = totalDefinedStock(product);
+  if (total > 0) return `${total} unidades`;
+  return product.variants.length ? "Indefinido" : "Sin variantes";
+}
+
 export function roleForImageNumber(imageNumber: number): ImageRole {
   if (imageNumber === 1) return "portada";
   if (imageNumber === 2) return "espalda remera";
@@ -414,9 +436,6 @@ export function validateProduct(
   if (!draft.colors.length) issues.push({ field: "colors", message: "Falta seleccionar un color.", severity: "error" });
   if (!draft.sizes.length) issues.push({ field: "sizes", message: "Falta seleccionar un talle.", severity: "error" });
   if (!draft.price) issues.push({ field: "price", message: "Falta el precio.", severity: "error" });
-  if (!draft.variants.some((variant) => variant.stock > 0)) {
-    issues.push({ field: "stock", message: "Todavía no hay stock cargado.", severity: "error" });
-  }
   if (!draft.images.some((image) => image.imageNumber === 1)) {
     issues.push({ field: "images", message: "Falta una imagen 01 de portada.", severity: "warning" });
   }
@@ -429,7 +448,7 @@ export function validateProduct(
 export function makeProductSheet(draft: ProductDraft) {
   const indentLong = (draft.longDescription || "").split("\n").map((line) => `  ${line}`).join("\n");
   const variants = draft.variants
-    .map((variant) => `  ${variant.sku} | ${variant.sizeCode} | ${variant.colorCode} | ${variant.stock}`)
+    .map((variant) => `  ${variant.sku} | ${variant.sizeCode} | ${variant.colorCode} | ${variant.stock > 0 ? variant.stock : "indefinido"}`)
     .join("\n");
   const images = draft.images
     .sort((a, b) => a.imageNumber - b.imageNumber)
@@ -460,6 +479,59 @@ export function makeProductSheet(draft: ProductDraft) {
     variants,
     "imagenes:",
     images,
+  ].join("\n");
+}
+
+export function makeWebProductInfo(draft: ProductDraft) {
+  const colorNames = draft.colors.map((code) => COLOR_CATALOG[code].name).join(", ") || "Sin colores";
+  const sizes = draft.sizes.join(", ") || "Sin talles";
+  const variants = draft.variants.length
+    ? draft.variants
+        .map((variant) => {
+          const color = COLOR_CATALOG[variant.colorCode]?.name ?? variant.colorCode;
+          return `- ${variant.sku}: ${color} / ${variant.sizeCode} / ${formatStockQuantity(variant.stock)}`;
+        })
+        .join("\n")
+    : "- Sin variantes";
+  const tags = draft.tags.length ? draft.tags.map((tag) => `#${tag}`).join(" ") : "Sin tags";
+
+  return [
+    "INFORMACION PARA WEB",
+    "",
+    `Nombre: ${draft.name || "Sin nombre"}`,
+    `Codigo: ${draft.modelCode || "Sin codigo"}`,
+    `Slug: ${draft.slug || "Sin slug"}`,
+    `Precio: ${draft.price || ""}`,
+    `Precio anterior: ${draft.previousPrice ?? ""}`,
+    `Estado: ${draft.status}`,
+    `Categoria: ${draft.category || ""}`,
+    `Genero: ${draft.gender || ""}`,
+    `Tecnica: ${draft.technique || ""}`,
+    `Material: ${draft.material || ""}`,
+    `Coleccion / drop: ${draft.collectionDrop || ""}`,
+    `Destacado: ${draft.highlighted ? "si" : "no"}`,
+    `Orden: ${draft.sortOrder}`,
+    "",
+    `Colores: ${colorNames}`,
+    `Talles: ${sizes}`,
+    `Stock: ${formatStockSummary(draft)}`,
+    "",
+    "Descripcion corta:",
+    draft.shortDescription || "",
+    "",
+    "Descripcion larga:",
+    draft.longDescription || "",
+    "",
+    "Texto WhatsApp:",
+    draft.whatsappText || "",
+    "",
+    "Variantes:",
+    variants,
+    "",
+    `Tags: ${tags}`,
+    "",
+    "Notas internas:",
+    draft.notes || "",
   ].join("\n");
 }
 

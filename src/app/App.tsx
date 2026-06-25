@@ -3,6 +3,8 @@ import {
   Archive,
   Boxes,
   ChevronDown,
+  Cloud,
+  CloudUpload,
   FolderClock,
   Gauge,
   History,
@@ -15,10 +17,19 @@ import {
   X,
 } from "lucide-react";
 import { initializeDesktop, listProducts } from "../services/desktopService";
+import {
+  formatBackupDate,
+  getBackupStatus,
+  restoreBackup,
+  runBackup,
+  shouldRunAutomaticBackup,
+  type BackupStatus,
+} from "../services/backupService";
 import { useProductStore } from "../store/useProductStore";
 import type { ProductDraft } from "../types/product";
 import Studio from "../features/studio/Studio";
 import {
+  BackupView,
   DashboardView,
   HistoryView,
   ProductsView,
@@ -31,6 +42,7 @@ export type AppView =
   | "studio"
   | "products"
   | "search"
+  | "backup"
   | "history"
   | "settings";
 
@@ -43,6 +55,7 @@ const navigation: Array<{
   { id: "studio", label: "Crear producto", icon: PackagePlus },
   { id: "products", label: "Productos", icon: Boxes },
   { id: "search", label: "Buscador", icon: Search },
+  { id: "backup", label: "Backup", icon: CloudUpload },
   { id: "history", label: "Historial", icon: History },
   { id: "settings", label: "Ajustes", icon: Settings },
 ];
@@ -55,21 +68,99 @@ function App() {
   );
   const [products, setProducts] = useState<ProductDraft[]>([]);
   const [appMode, setAppMode] = useState<"desktop" | "browser">("browser");
+  const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  const [backupMessage, setBackupMessage] = useState("Backup sin revisar");
   const setDraft = useProductStore((state) => state.setDraft);
   const resetDraft = useProductStore((state) => state.resetDraft);
   const draft = useProductStore((state) => state.draft);
+  const settings = useProductStore((state) => state.settings);
 
-  const refreshProducts = async () => {
+  const loadProducts = async () => {
     const next = await listProducts();
     setProducts(next);
+    return next;
+  };
+
+  const refreshProducts = async () => {
+    await loadProducts();
   };
 
   useEffect(() => {
-    initializeDesktop()
-      .then((result) => setAppMode("mode" in result ? result.mode : "desktop"))
-      .catch(() => setAppMode("browser"));
-    void refreshProducts();
-  }, []);
+    let cancelled = false;
+
+    const syncBackup = async (mode: "startup" | "daily") => {
+      if (!settings.backupEnabled) {
+        setBackupMessage("Backup automatico pausado");
+        return;
+      }
+      const currentProducts = await loadProducts();
+      const status = await getBackupStatus(settings.backupRoot);
+      if (cancelled) return;
+      setBackupStatus(status);
+      if (!status.available) {
+        setBackupMessage("Drive no detectado");
+        return;
+      }
+      if (status.backupExists && currentProducts.length === 0) {
+        setBackupMessage("Restaurando backup de Drive");
+        const result = await restoreBackup(settings.backupRoot);
+        if (cancelled) return;
+        setBackupStatus(result.status);
+        setBackupMessage("Backup restaurado desde Drive");
+        await loadProducts();
+        return;
+      }
+      if (shouldRunAutomaticBackup(status, currentProducts, settings.backupFrequencyDays)) {
+        setBackupMessage("Guardando backup en Drive");
+        const result = await runBackup(settings.backupRoot, mode === "startup" ? "auto-startup" : "auto-daily");
+        if (cancelled) return;
+        setBackupStatus(result.status);
+        setBackupMessage("Backup de Drive actualizado");
+        return;
+      }
+      setBackupMessage(
+        status.backupExists ? `Drive listo para subir o bajar - ${formatBackupDate(status.lastBackupAt)}` : "Drive listo",
+      );
+    };
+
+    const start = async () => {
+      let mode: "desktop" | "browser" = "browser";
+      try {
+        const result = await initializeDesktop();
+        mode = "mode" in result ? result.mode : "desktop";
+      } catch {
+        mode = "browser";
+      }
+      if (cancelled) return;
+      setAppMode(mode);
+      await loadProducts();
+      if (mode === "desktop") {
+        try {
+          await syncBackup("startup");
+        } catch (error) {
+          if (!cancelled) {
+            setBackupMessage(error instanceof Error ? error.message : "No pude revisar Drive");
+          }
+        }
+      } else {
+        setBackupMessage("Backup disponible en escritorio");
+      }
+    };
+
+    void start();
+    const intervalId = window.setInterval(() => {
+      void syncBackup("daily").catch((error) => {
+        if (!cancelled) {
+          setBackupMessage(error instanceof Error ? error.message : "No pude actualizar Drive");
+        }
+      });
+    }, 24 * 60 * 60 * 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [settings.backupEnabled, settings.backupFrequencyDays, settings.backupRoot]);
 
   const toggleSidebar = () => {
     setSidebarCollapsed((collapsed) => {
@@ -100,10 +191,12 @@ function App() {
         return <ProductsView products={products} onOpen={openProduct} onRefresh={refreshProducts} />;
       case "search":
         return <SearchView onOpen={openProduct} />;
+      case "backup":
+        return <BackupView onProductsChanged={refreshProducts} />;
       case "history":
         return <HistoryView products={products} onOpen={openProduct} />;
       case "settings":
-        return <SettingsView appMode={appMode} />;
+        return <SettingsView appMode={appMode} onProductsChanged={refreshProducts} />;
       default:
         return null;
     }
@@ -203,6 +296,9 @@ function App() {
           </span>
           <span>
             <FolderClock size={14} /> Guardado local
+          </span>
+          <span>
+            <Cloud size={14} /> {backupStatus?.available ? backupMessage : backupMessage}
           </span>
         </footer>
       </main>

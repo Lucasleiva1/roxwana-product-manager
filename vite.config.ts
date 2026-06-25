@@ -1,13 +1,24 @@
 import { Buffer } from "node:buffer";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, copyFileSync, rmSync } from "node:fs";
-import { join, basename } from "node:path";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 const PRODUCT_PACKAGE_ROOT = join(homedir(), "Documents", "ROXWANA Product Manager");
+const BACKUP_FOLDER_NAME = "ROXWANA Product Manager Backup";
 
 function safeName(value: string, fallback: string) {
   const clean = basename(value || fallback)
@@ -63,6 +74,7 @@ function saveProductPackage(payload: any) {
   createFolderStructure(folder);
 
   writeFileSync(join(folder, "ficha", "product-sheet.txt"), payload.productSheet || "", "utf8");
+  if (payload.webInfo) writeFileSync(join(folder, "ficha", "info-web.txt"), payload.webInfo, "utf8");
   writeFileSync(join(folder, "ficha", "product.json"), JSON.stringify(payload.product, null, 2), "utf8");
   if (payload.product?.notes) {
     writeFileSync(join(folder, "notas", "notas.txt"), String(payload.product.notes), "utf8");
@@ -108,6 +120,238 @@ function savePrintFiles(productFolder: string, printFiles: any[]) {
   }
 }
 
+function safeJsonResponse(response: import("node:http").ServerResponse, value: unknown) {
+  response.setHeader("Content-Type", "application/json");
+  response.end(JSON.stringify(value));
+}
+
+function googleDriveCandidates() {
+  const candidates = [
+    join(homedir(), "Google Drive"),
+    join(homedir(), "My Drive"),
+    join(homedir(), "Mi unidad"),
+    join(homedir(), "Google Drive", "My Drive"),
+    join(homedir(), "Google Drive", "Mi unidad"),
+  ];
+  for (let code = "D".charCodeAt(0); code <= "Z".charCodeAt(0); code += 1) {
+    const root = `${String.fromCharCode(code)}:\\`;
+    candidates.push(join(root, "My Drive"));
+    candidates.push(join(root, "Mi unidad"));
+    candidates.push(join(root, "Google Drive"));
+  }
+  return candidates;
+}
+
+function findGoogleDriveRoot() {
+  return googleDriveCandidates().find((candidate) => existsSync(candidate));
+}
+
+function resolveBackupLocation(backupRoot?: string) {
+  const configured = String(backupRoot || "").trim();
+  if (configured) return { drivePath: dirname(configured), backupPath: configured };
+  const drivePath = findGoogleDriveRoot();
+  if (!drivePath) {
+    throw new Error("No pude detectar Google Drive en esta PC. Abrilo una vez o configura la carpeta en Ajustes.");
+  }
+  return { drivePath, backupPath: join(drivePath, BACKUP_FOLDER_NAME) };
+}
+
+function backupManifestPath(backupPath: string) {
+  return join(backupPath, "current", "manifest.json");
+}
+
+function readBackupManifest(backupPath: string) {
+  const path = backupManifestPath(backupPath);
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function backupStatus(backupRoot?: string) {
+  try {
+    const { drivePath, backupPath } = resolveBackupLocation(backupRoot);
+    const manifest = readBackupManifest(backupPath);
+    return {
+      available: true,
+      backupExists: Boolean(manifest),
+      drivePath,
+      backupPath,
+      lastBackupAt: manifest?.createdAt,
+      productCount: manifest?.productCount || 0,
+      fileCount: manifest?.fileCount || 0,
+      totalBytes: manifest?.totalBytes || 0,
+      message: manifest ? "Backup disponible en Google Drive." : "Google Drive detectado, todavia no hay backup.",
+    };
+  } catch (error) {
+    return {
+      available: false,
+      backupExists: false,
+      productCount: 0,
+      fileCount: 0,
+      totalBytes: 0,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function removePath(path: string) {
+  if (existsSync(path)) rmSync(path, { recursive: true, force: true });
+}
+
+function replaceDirectory(next: string, current: string) {
+  const previous = `${current}.previous`;
+  removePath(previous);
+  if (existsSync(current)) renameSync(current, previous);
+  try {
+    renameSync(next, current);
+    removePath(previous);
+  } catch (error) {
+    if (existsSync(previous)) renameSync(previous, current);
+    throw error;
+  }
+}
+
+function copyDirectory(source: string, destination: string, summary: { fileCount: number; totalBytes: number }) {
+  mkdirSync(destination, { recursive: true });
+  if (!existsSync(source)) return;
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    const sourcePath = join(source, entry.name);
+    const destinationPath = join(destination, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectory(sourcePath, destinationPath, summary);
+    } else if (entry.isFile()) {
+      mkdirSync(dirname(destinationPath), { recursive: true });
+      copyFileSync(sourcePath, destinationPath);
+      const size = statSync(sourcePath).size;
+      summary.fileCount += 1;
+      summary.totalBytes += size;
+    }
+  }
+}
+
+function sqlString(value: string) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function databasePath() {
+  return join(process.cwd(), "data", "roxwana.db");
+}
+
+function productCount() {
+  const path = databasePath();
+  if (!existsSync(path)) return 0;
+  const db = new DatabaseSync(path);
+  try {
+    const row = db.prepare("SELECT COUNT(*) AS total FROM products").get() as { total?: number } | undefined;
+    return Number(row?.total || 0);
+  } catch {
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+function writeDatabaseBackup(destination: string, summary: { fileCount: number; totalBytes: number }) {
+  const source = databasePath();
+  if (!existsSync(source)) return;
+  mkdirSync(dirname(destination), { recursive: true });
+  removePath(destination);
+  const db = new DatabaseSync(source);
+  try {
+    db.exec(`VACUUM INTO ${sqlString(destination)}`);
+  } finally {
+    db.close();
+  }
+  if (existsSync(destination)) {
+    summary.fileCount += 1;
+    summary.totalBytes += statSync(destination).size;
+  }
+}
+
+function normalizeRestoredDatabasePaths() {
+  const path = databasePath();
+  if (!existsSync(path)) return;
+  const db = new DatabaseSync(path);
+  try {
+    const rows = db
+      .prepare("SELECT id, model_code, product_json FROM products")
+      .all() as Array<{ id: string; model_code: string; product_json: string }>;
+    const update = db.prepare("UPDATE products SET product_folder_path = ?, product_json = ? WHERE id = ?");
+    for (const row of rows) {
+      const folder = productPackageFolder(row.model_code);
+      const product = JSON.parse(row.product_json);
+      product.images = (product.images || []).map((image: any) => {
+        const originalName = safeName(image.originalName, "imagen-original");
+        const finalName = safeName(image.finalFilename, "imagen.webp");
+        const { previewUrl, ...next } = image;
+        return {
+          ...next,
+          originalPath: join(folder, "imagenes", "originales", originalName),
+          finalPath: join(folder, "imagenes", "webp", finalName),
+        };
+      });
+      update.run(folder, JSON.stringify(product), row.id);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function runDevBackup(backupRoot?: string, reason = "manual") {
+  const { backupPath } = resolveBackupLocation(backupRoot);
+  const current = join(backupPath, "current");
+  const next = join(backupPath, "current.tmp");
+  const summary = { fileCount: 0, totalBytes: 0 };
+  mkdirSync(backupPath, { recursive: true });
+  removePath(next);
+  mkdirSync(join(next, "data"), { recursive: true });
+  writeDatabaseBackup(join(next, "data", "roxwana.db"), summary);
+  copyDirectory(join(PRODUCT_PACKAGE_ROOT, "productos"), join(next, "productos"), summary);
+  const manifest = {
+    appName: "ROXWANA Product Manager",
+    backupVersion: 1,
+    createdAt: new Date().toISOString(),
+    reason,
+    sourceDatabasePath: databasePath(),
+    sourceProductRoot: join(PRODUCT_PACKAGE_ROOT, "productos"),
+    productCount: productCount(),
+    fileCount: summary.fileCount,
+    totalBytes: summary.totalBytes,
+  };
+  writeFileSync(join(next, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+  replaceDirectory(next, current);
+  return {
+    status: backupStatus(backupRoot),
+    backedUp: true,
+    restored: false,
+    backupPath,
+    message: "Backup guardado en Google Drive.",
+  };
+}
+
+function restoreDevBackup(backupRoot?: string) {
+  const { backupPath } = resolveBackupLocation(backupRoot);
+  const current = join(backupPath, "current");
+  const dbBackup = join(current, "data", "roxwana.db");
+  if (!existsSync(dbBackup)) throw new Error("El backup no tiene la base roxwana.db.");
+  mkdirSync(dirname(databasePath()), { recursive: true });
+  copyFileSync(dbBackup, databasePath());
+  const productsBackup = join(current, "productos");
+  const productsRoot = join(PRODUCT_PACKAGE_ROOT, "productos");
+  const nextProducts = `${productsRoot}.restore.tmp`;
+  removePath(nextProducts);
+  const summary = { fileCount: 0, totalBytes: 0 };
+  copyDirectory(productsBackup, nextProducts, summary);
+  replaceDirectory(nextProducts, productsRoot);
+  normalizeRestoredDatabasePaths();
+  return {
+    status: backupStatus(backupRoot),
+    backedUp: false,
+    restored: true,
+    backupPath,
+    message: "Backup restaurado desde Google Drive.",
+  };
+}
+
 function deleteProductRecord(productId: string) {
   const db = new DatabaseSync(join(process.cwd(), "data", "roxwana.db"));
   try {
@@ -149,6 +393,46 @@ function productPackagePlugin(): Plugin {
   return {
     name: "roxwana-product-package",
     configureServer(server) {
+      server.middlewares.use("/api/backup/status", async (request, response) => {
+        try {
+          const payload = request.method === "POST" ? await readRequestBody(request) : {};
+          safeJsonResponse(response, backupStatus(payload?.backupRoot));
+        } catch (error) {
+          response.statusCode = 500;
+          safeJsonResponse(response, { error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+
+      server.middlewares.use("/api/backup/run", async (request, response) => {
+        try {
+          if (request.method !== "POST") {
+            response.statusCode = 405;
+            response.end("Method Not Allowed");
+            return;
+          }
+          const payload = await readRequestBody(request);
+          safeJsonResponse(response, runDevBackup(payload?.backupRoot, payload?.reason || "manual"));
+        } catch (error) {
+          response.statusCode = 500;
+          safeJsonResponse(response, { error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+
+      server.middlewares.use("/api/backup/restore", async (request, response) => {
+        try {
+          if (request.method !== "POST") {
+            response.statusCode = 405;
+            response.end("Method Not Allowed");
+            return;
+          }
+          const payload = await readRequestBody(request);
+          safeJsonResponse(response, restoreDevBackup(payload?.backupRoot));
+        } catch (error) {
+          response.statusCode = 500;
+          safeJsonResponse(response, { error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+
       server.middlewares.use("/api/product-package", async (request, response) => {
         try {
           if (request.method !== "POST") {
@@ -251,7 +535,11 @@ function productPackagePlugin(): Plugin {
           }
           const payload = await readRequestBody(request);
           const folderPath = productPackageFolder(payload.modelCode || "");
-          mkdirSync(folderPath, { recursive: true });
+          if (!existsSync(folderPath)) {
+            response.statusCode = 404;
+            response.end("La carpeta del producto todavia no existe.");
+            return;
+          }
           execFile("explorer.exe", [folderPath]);
           response.setHeader("Content-Type", "application/json");
           response.end(JSON.stringify({ folderPath }));

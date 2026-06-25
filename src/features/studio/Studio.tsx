@@ -41,8 +41,11 @@ import {
   type SizeCode,
 } from "../../types/product";
 import {
+  formatStockQuantity,
+  formatStockSummary,
   imageFilename,
   makeProductSheet,
+  makeWebProductInfo,
   roleForImageNumber,
   uid,
   validateProduct,
@@ -54,6 +57,7 @@ import {
   isTauri,
   listProducts,
   openProductFolder,
+  openProductPackageFolder,
   persistProductImage,
   savePrintFiles,
   saveBarcodeFiles,
@@ -234,6 +238,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [ollamaError, setOllamaError] = useState("");
   const [knownSkus, setKnownSkus] = useState<string[]>([]);
   const [knownModelCodes, setKnownModelCodes] = useState<string[]>([]);
+  const [knownProductIds, setKnownProductIds] = useState<string[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [galleryExpanded, setGalleryExpanded] = useState(false);
   const [barcodeOpen, setBarcodeOpen] = useState(false);
@@ -262,6 +267,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const openingEmptyDraft = useRef(false);
 
   const sheet = useMemo(() => makeProductSheet(draft), [draft]);
+  const webInfo = useMemo(() => makeWebProductInfo(draft), [draft]);
   const issues = useMemo(
     () => validateProduct(draft, knownSkus, knownModelCodes),
     [draft, knownSkus, knownModelCodes],
@@ -290,7 +296,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     Boolean(draft.colors.length),
     Boolean(draft.sizes.length),
     draft.price > 0,
-    draft.variants.some((variant) => variant.stock > 0),
+    draft.variants.length > 0,
   ];
   const completion = Math.round(
     (completionFields.filter(Boolean).length / completionFields.length) * 100,
@@ -298,6 +304,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const mainImage =
     draft.images.find((image) => image.imageNumber === 1) ?? draft.images[0] ?? null;
   const showCreatorActionLabels = settings.creatorActionLabels;
+  const productAlreadySaved = knownProductIds.includes(draft.id);
 
   useEffect(() => {
     if (lastDraftId.current === draft.id) return;
@@ -354,6 +361,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     void listProducts().then(async (products) => {
       if (!active) return;
       const others = products.filter((product) => product.id !== draft.id);
+      setKnownProductIds(products.map((product) => product.id));
       setKnownSkus(others.flatMap((product) => product.variants.map((variant) => variant.sku)));
       setKnownModelCodes(others.map((product) => product.modelCode));
       if (draft.garmentType && !products.some((product) => product.id === draft.id)) {
@@ -880,9 +888,11 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       }
       const productToSave = useProductStore.getState().draft;
       const productSheet = makeProductSheet(productToSave);
+      const productWebInfo = makeWebProductInfo(productToSave);
       const packageResult = await saveProductPackage({
         product: productToSave,
         productSheet,
+        webInfo: productWebInfo,
         images: await buildPackageImages(productToSave),
         barcodes: await buildPackageBarcodes(productToSave),
         printFiles: await buildPackagePrintFiles(),
@@ -912,28 +922,42 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     }
   };
 
-  const handleCreateFolder = async () => {
+  const handleOpenProductFolder = async () => {
+    if (!productAlreadySaved) {
+      notify("Primero guarda el producto. Despues vas a poder abrir su carpeta.");
+      return;
+    }
     if (!draft.modelCode) {
-      notify("Todavía no hay un código de producto para crear la carpeta.");
+      notify("Todavia no hay un codigo de producto para abrir la carpeta.");
       return;
     }
     setActionBusy("folder");
     try {
-      const result = await saveProductPackage({
-        product: draft,
-        productSheet: sheet,
-        images: await buildPackageImages(draft),
-        barcodes: await buildPackageBarcodes(draft),
-        printFiles: await buildPackagePrintFiles(),
-      });
+      const result = await openProductPackageFolder(draft.modelCode);
       setFolderPath(result.folderPath);
       setLastSavedFolder(result.folderPath);
-      notify("Carpeta completa creada en Documentos");
+      notify("Carpeta abierta");
     } catch {
-      notify("No pude crear la carpeta");
+      notify("No pude abrir la carpeta. Guarda el producto para crear sus archivos.");
     } finally {
       setActionBusy(null);
     }
+  };
+
+  const handleCopyWebInfo = async () => {
+    await navigator.clipboard.writeText(webInfo);
+    notify("Informacion web copiada");
+  };
+
+  const handleDownloadWebInfo = () => {
+    const blob = new Blob([webInfo], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${draft.modelCode || "producto"}-info-web.txt`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    notify("Archivo info-web.txt generado");
   };
 
   const handleExport = async () => {
@@ -1669,7 +1693,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
             )}
             <div className="variant-summary">
               <span>{draft.variants.length} variantes</span>
-              <strong>{draft.variants.reduce((total, variant) => total + variant.stock, 0)} unidades</strong>
+              <strong>{formatStockSummary(draft)}</strong>
             </div>
             <div className="stock-strip">
               {draft.variants.slice(0, 6).map((variant) => (
@@ -1681,6 +1705,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                     value={variant.stock}
                     onChange={(event) => setVariantStock(variant.sku, Number(event.target.value))}
                   />
+                  <small>{variant.stock > 0 ? "Stock" : "Indef."}</small>
                 </label>
               ))}
             </div>
@@ -1703,14 +1728,22 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               <Button onClick={() => onNavigate("settings")}>
                 <Settings2 size={16} /> Ajustes
               </Button>
-              <Button loading={actionBusy === "folder"} onClick={handleCreateFolder}>
-                <FolderPlus size={16} /> Crear carpeta
+              <Button
+                loading={actionBusy === "folder"}
+                onClick={handleOpenProductFolder}
+                disabled={!productAlreadySaved}
+                title={productAlreadySaved ? "Abrir carpeta del producto" : "Disponible despues de guardar el producto"}
+              >
+                <FolderPlus size={16} /> Abrir carpeta
               </Button>
               <Button onClick={() => setPreviewOpen(true)}>
                 <Eye size={16} /> Vista previa
               </Button>
               <Button loading={actionBusy === "export"} onClick={handleExport}>
                 <FileOutput size={16} /> Exportar ficha
+              </Button>
+              <Button onClick={handleCopyWebInfo}>
+                <Copy size={16} /> Copiar info web
               </Button>
               <Button variant="primary" loading={actionBusy === "save"} onClick={handleSave}>
                 <Save size={16} /> Guardar producto
@@ -1918,7 +1951,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                         <strong>{variant.sizeCode} - {variant.colorCode}</strong>
                         <code>{variant.sku}</code>
                       </span>
-                      <em>{variant.stock} u.</em>
+                      <em>{formatStockQuantity(variant.stock)}</em>
                     </button>
                   ))
                 ) : (
@@ -2014,6 +2047,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                     >
                       <Copy size={14} /> Copiar
                     </button>
+                    <button type="button" onClick={handleCopyWebInfo}>
+                      <Copy size={14} /> Info web
+                    </button>
+                    <button type="button" onClick={handleDownloadWebInfo}>
+                      <Download size={14} /> TXT web
+                    </button>
                     <button type="button" onClick={handlePrintSheet}>
                       <Printer size={14} /> Imprimir
                     </button>
@@ -2034,14 +2073,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
             </div>
             <footer>
               <Button onClick={() => setPreviewOpen(false)}>Seguir editando</Button>
-              <Button loading={actionBusy === "folder"} onClick={handleCreateFolder}>
-                <FolderPlus size={16} /> Crear carpeta
+              <Button
+                loading={actionBusy === "folder"}
+                onClick={handleOpenProductFolder}
+                disabled={!productAlreadySaved}
+                title={productAlreadySaved ? "Abrir carpeta del producto" : "Disponible despues de guardar el producto"}
+              >
+                <FolderPlus size={16} /> Abrir carpeta
               </Button>
-              {folderPath && (
-                <Button onClick={() => openProductFolder(folderPath)}>
-                  <FolderPlus size={16} /> Abrir carpeta
-                </Button>
-              )}
               <Button variant="primary" onClick={handleSave}>
                 <Save size={16} /> Guardar producto
               </Button>

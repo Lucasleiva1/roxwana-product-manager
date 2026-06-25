@@ -39,6 +39,7 @@ export interface ProductPackagePrintFile {
 export interface ProductPackagePayload {
   product: ProductDraft;
   productSheet: string;
+  webInfo?: string;
   images: ProductPackageImage[];
   barcodes: ProductPackageBarcode[];
   printFiles?: ProductPackagePrintFile[];
@@ -54,6 +55,21 @@ function readLocalProducts(): ProductDraft[] {
 
 function writeLocalProducts(products: ProductDraft[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+}
+
+function hydrateDesktopProduct(product: ProductDraft): ProductDraft {
+  if (!isTauri()) return product;
+  return {
+    ...product,
+    images: product.images.map((image) => ({
+      ...image,
+      previewUrl: image.previewUrl || (image.finalPath ? convertFileSrc(image.finalPath) : undefined),
+    })),
+  };
+}
+
+function hydrateDesktopProducts(products: ProductDraft[]) {
+  return products.map(hydrateDesktopProduct);
 }
 
 function errorMessage(error: unknown, fallback: string) {
@@ -84,7 +100,7 @@ export async function saveProduct(product: ProductDraft) {
 }
 
 export async function listProducts(): Promise<ProductDraft[]> {
-  if (isTauri()) return invoke<ProductDraft[]>("list_products");
+  if (isTauri()) return hydrateDesktopProducts(await invoke<ProductDraft[]>("list_products"));
   return readLocalProducts();
 }
 
@@ -144,7 +160,7 @@ export async function deleteProduct(productId: string, modelCode?: string): Prom
 }
 
 export async function searchProducts(query: string): Promise<ProductDraft[]> {
-  if (isTauri()) return invoke<ProductDraft[]>("search_products", { query });
+  if (isTauri()) return hydrateDesktopProducts(await invoke<ProductDraft[]>("search_products", { query }));
   const normalized = query.toLowerCase().trim();
   if (!normalized) return readLocalProducts();
   return readLocalProducts().filter((product) =>

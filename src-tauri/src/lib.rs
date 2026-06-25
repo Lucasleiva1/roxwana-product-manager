@@ -10,6 +10,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 const MIGRATION: &str = include_str!("../migrations/001_initial.sql");
+const BACKUP_FOLDER_NAME: &str = "ROXWANA Product Manager Backup";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +49,50 @@ struct ImageFileResult {
 struct TranscriptionResult {
     text: String,
     language: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BackupManifest {
+    app_name: String,
+    backup_version: i64,
+    created_at: String,
+    reason: String,
+    source_database_path: String,
+    source_product_root: String,
+    product_count: i64,
+    file_count: u64,
+    total_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupStatus {
+    available: bool,
+    backup_exists: bool,
+    drive_path: Option<String>,
+    backup_path: Option<String>,
+    last_backup_at: Option<String>,
+    product_count: i64,
+    file_count: u64,
+    total_bytes: u64,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupOperationResult {
+    status: BackupStatus,
+    backed_up: bool,
+    restored: bool,
+    backup_path: Option<String>,
+    message: String,
+}
+
+#[derive(Default)]
+struct CopySummary {
+    file_count: u64,
+    total_bytes: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +145,7 @@ struct PackageBarcodeInput {
 struct ProductPackageInput {
     product: Value,
     product_sheet: String,
+    web_info: Option<String>,
     images: Vec<PackageImageInput>,
     barcodes: Vec<PackageBarcodeInput>,
     #[serde(default)]
@@ -239,6 +285,236 @@ fn decode_data_url(value: &str) -> Result<Vec<u8>, String> {
     BASE64.decode(encoded).map_err(|error| error.to_string())
 }
 
+fn is_existing_dir(path: &Path) -> bool {
+    path.exists() && path.is_dir()
+}
+
+fn find_google_drive_root() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let home = PathBuf::from(user_profile);
+        candidates.push(home.join("Google Drive"));
+        candidates.push(home.join("My Drive"));
+        candidates.push(home.join("Mi unidad"));
+        candidates.push(home.join("Google Drive").join("My Drive"));
+        candidates.push(home.join("Google Drive").join("Mi unidad"));
+    }
+    if let Ok(home_drive) = std::env::var("HOMEDRIVE") {
+        for label in ["My Drive", "Mi unidad", "Google Drive"] {
+            candidates.push(PathBuf::from(format!("{home_drive}\\{label}")));
+        }
+    }
+    for letter in b'D'..=b'Z' {
+        let root = format!("{}:\\", letter as char);
+        for label in ["My Drive", "Mi unidad", "Google Drive"] {
+            candidates.push(PathBuf::from(&root).join(label));
+        }
+    }
+    candidates.into_iter().find(|path| is_existing_dir(path))
+}
+
+fn resolve_backup_location(backup_root: Option<String>) -> Result<(Option<PathBuf>, PathBuf), String> {
+    if let Some(path) = backup_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let backup_path = PathBuf::from(path);
+        return Ok((backup_path.parent().map(Path::to_path_buf), backup_path));
+    }
+    if let Some(drive_path) = find_google_drive_root() {
+        return Ok((Some(drive_path.clone()), drive_path.join(BACKUP_FOLDER_NAME)));
+    }
+    Err("No pude detectar Google Drive en esta PC. Abrilo una vez o configura una carpeta de backup.".to_string())
+}
+
+fn remove_path(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        fs::remove_dir_all(path).map_err(|error| error.to_string())
+    } else {
+        fs::remove_file(path).map_err(|error| error.to_string())
+    }
+}
+
+fn replace_directory(next: &Path, current: &Path) -> Result<(), String> {
+    let previous = current.with_extension("previous");
+    remove_path(&previous)?;
+    if current.exists() {
+        fs::rename(current, &previous).map_err(|error| error.to_string())?;
+    }
+    if let Err(error) = fs::rename(next, current) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, current);
+        }
+        return Err(error.to_string());
+    }
+    remove_path(&previous)?;
+    Ok(())
+}
+
+fn replace_file(next: &Path, current: &Path) -> Result<(), String> {
+    let previous = current.with_extension("previous");
+    remove_path(&previous)?;
+    if current.exists() {
+        fs::rename(current, &previous).map_err(|error| error.to_string())?;
+    }
+    if let Err(error) = fs::rename(next, current) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, current);
+        }
+        return Err(error.to_string());
+    }
+    remove_path(&previous)?;
+    Ok(())
+}
+
+fn copy_file_with_summary(source: &Path, destination: &Path, summary: &mut CopySummary) -> Result<(), String> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::copy(source, destination).map_err(|error| error.to_string())?;
+    summary.file_count += 1;
+    summary.total_bytes += fs::metadata(source).map(|metadata| metadata.len()).unwrap_or(0);
+    Ok(())
+}
+
+fn copy_dir_all(source: &Path, destination: &Path, summary: &mut CopySummary) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    if !source.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let destination_path = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_all(&entry.path(), &destination_path, summary)?;
+        } else if file_type.is_file() {
+            copy_file_with_summary(&entry.path(), &destination_path, summary)?;
+        }
+    }
+    Ok(())
+}
+
+fn manifest_path(backup_path: &Path) -> PathBuf {
+    backup_path.join("current").join("manifest.json")
+}
+
+fn read_backup_manifest(backup_path: &Path) -> Option<BackupManifest> {
+    let content = fs::read_to_string(manifest_path(backup_path)).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn backup_status_for_location(drive_path: Option<PathBuf>, backup_path: PathBuf) -> BackupStatus {
+    let manifest = read_backup_manifest(&backup_path);
+    BackupStatus {
+        available: true,
+        backup_exists: manifest.is_some(),
+        drive_path: drive_path.map(|path| path.to_string_lossy().to_string()),
+        backup_path: Some(backup_path.to_string_lossy().to_string()),
+        last_backup_at: manifest.as_ref().map(|item| item.created_at.clone()),
+        product_count: manifest.as_ref().map(|item| item.product_count).unwrap_or(0),
+        file_count: manifest.as_ref().map(|item| item.file_count).unwrap_or(0),
+        total_bytes: manifest.as_ref().map(|item| item.total_bytes).unwrap_or(0),
+        message: if manifest.is_some() {
+            "Backup disponible en Google Drive.".to_string()
+        } else {
+            "Google Drive detectado, todavia no hay backup de ROXWANA.".to_string()
+        },
+    }
+}
+
+fn sqlite_sidecar_paths(path: &Path) -> Vec<PathBuf> {
+    let raw = path.to_string_lossy();
+    vec![
+        PathBuf::from(format!("{raw}-wal")),
+        PathBuf::from(format!("{raw}-shm")),
+    ]
+}
+
+fn remove_sqlite_sidecars(path: &Path) {
+    for sidecar in sqlite_sidecar_paths(path) {
+        let _ = remove_path(&sidecar);
+    }
+}
+
+fn normalize_restored_database_paths(app: &AppHandle) -> Result<(), String> {
+    let connection = connection(app)?;
+    let products: Vec<(String, String, String)> = {
+        let mut statement = connection
+            .prepare("SELECT id, model_code, product_json FROM products")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+    };
+
+    for (id, model_code, product_json) in products {
+        let folder = product_folder(app, &model_code)?;
+        let mut product: Value = serde_json::from_str(&product_json).map_err(|error| error.to_string())?;
+        if let Some(images) = product.get_mut("images").and_then(Value::as_array_mut) {
+            for image in images {
+                if let Some(object) = image.as_object_mut() {
+                    let original_name = object
+                        .get("originalName")
+                        .and_then(Value::as_str)
+                        .unwrap_or("imagen-original")
+                        .to_string();
+                    let final_filename = object
+                        .get("finalFilename")
+                        .and_then(Value::as_str)
+                        .unwrap_or("imagen.webp")
+                        .to_string();
+                    object.insert(
+                        "originalPath".to_string(),
+                        Value::String(
+                            folder
+                                .join("imagenes/originales")
+                                .join(safe_file_name(&original_name, "imagen-original"))
+                                .to_string_lossy()
+                                .to_string(),
+                        ),
+                    );
+                    object.insert(
+                        "finalPath".to_string(),
+                        Value::String(
+                            folder
+                                .join("imagenes/webp")
+                                .join(safe_file_name(&final_filename, "imagen.webp"))
+                                .to_string_lossy()
+                                .to_string(),
+                        ),
+                    );
+                    object.remove("previewUrl");
+                }
+            }
+        }
+
+        connection
+            .execute(
+                "UPDATE products SET product_folder_path = ?1, product_json = ?2 WHERE id = ?3",
+                params![
+                    folder.to_string_lossy().to_string(),
+                    serde_json::to_string(&product).map_err(|error| error.to_string())?,
+                    id,
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn initialize_database(app: AppHandle) -> Result<DatabaseInfo, String> {
     connection(&app)?;
@@ -253,6 +529,129 @@ fn initialize_database(app: AppHandle) -> Result<DatabaseInfo, String> {
     .map_err(|error| error.to_string())?;
     Ok(DatabaseInfo {
         database_path: path.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+fn backup_status(backup_root: Option<String>) -> Result<BackupStatus, String> {
+    match resolve_backup_location(backup_root) {
+        Ok((drive_path, backup_path)) => Ok(backup_status_for_location(drive_path, backup_path)),
+        Err(message) => Ok(BackupStatus {
+            available: false,
+            backup_exists: false,
+            drive_path: None,
+            backup_path: None,
+            last_backup_at: None,
+            product_count: 0,
+            file_count: 0,
+            total_bytes: 0,
+            message,
+        }),
+    }
+}
+
+#[tauri::command]
+fn run_backup(
+    app: AppHandle,
+    backup_root: Option<String>,
+    reason: Option<String>,
+) -> Result<BackupOperationResult, String> {
+    let (drive_path, backup_path) = resolve_backup_location(backup_root)?;
+    fs::create_dir_all(&backup_path).map_err(|error| error.to_string())?;
+
+    let current = backup_path.join("current");
+    let next = backup_path.join("current.tmp");
+    remove_path(&next)?;
+    fs::create_dir_all(next.join("data")).map_err(|error| error.to_string())?;
+
+    let db_path = database_path(&app)?;
+    let product_root_path = product_root(&app)?;
+    let db_connection = connection(&app)?;
+    let product_count = db_connection
+        .query_row("SELECT COUNT(*) FROM products", [], |row| row.get::<_, i64>(0))
+        .map_err(|error| error.to_string())?;
+    let backup_db_path = next.join("data").join("roxwana.db");
+    let backup_db_arg = backup_db_path.to_string_lossy().to_string();
+    db_connection
+        .execute("VACUUM INTO ?1", params![backup_db_arg])
+        .map_err(|error| error.to_string())?;
+    drop(db_connection);
+
+    let mut summary = CopySummary::default();
+    if let Ok(metadata) = fs::metadata(&backup_db_path) {
+        summary.file_count += 1;
+        summary.total_bytes += metadata.len();
+    }
+    copy_dir_all(&product_root_path, &next.join("productos"), &mut summary)?;
+
+    let manifest = BackupManifest {
+        app_name: "ROXWANA Product Manager".to_string(),
+        backup_version: 1,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        reason: reason.unwrap_or_else(|| "manual".to_string()),
+        source_database_path: db_path.to_string_lossy().to_string(),
+        source_product_root: product_root_path.to_string_lossy().to_string(),
+        product_count,
+        file_count: summary.file_count,
+        total_bytes: summary.total_bytes,
+    };
+    fs::write(
+        next.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+
+    replace_directory(&next, &current)?;
+    let status = backup_status_for_location(drive_path, backup_path.clone());
+    Ok(BackupOperationResult {
+        status,
+        backed_up: true,
+        restored: false,
+        backup_path: Some(backup_path.to_string_lossy().to_string()),
+        message: "Backup guardado en Google Drive.".to_string(),
+    })
+}
+
+#[tauri::command]
+fn restore_backup(app: AppHandle, backup_root: Option<String>) -> Result<BackupOperationResult, String> {
+    let (drive_path, backup_path) = resolve_backup_location(backup_root)?;
+    let current = backup_path.join("current");
+    if !manifest_path(&backup_path).exists() {
+        return Err("No encontre un backup de ROXWANA en Google Drive.".to_string());
+    }
+
+    let backup_db_path = current.join("data").join("roxwana.db");
+    if !backup_db_path.exists() {
+        return Err("El backup no tiene la base de datos roxwana.db.".to_string());
+    }
+
+    let db_path = database_path(&app)?;
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    remove_sqlite_sidecars(&db_path);
+    let next_db_path = db_path.with_extension("restore.tmp");
+    remove_path(&next_db_path)?;
+    fs::copy(&backup_db_path, &next_db_path).map_err(|error| error.to_string())?;
+    replace_file(&next_db_path, &db_path)?;
+    remove_sqlite_sidecars(&db_path);
+
+    let backup_products = current.join("productos");
+    let product_root_path = product_root(&app)?;
+    let next_products_path = product_root_path.with_extension("restore.tmp");
+    remove_path(&next_products_path)?;
+    let mut summary = CopySummary::default();
+    copy_dir_all(&backup_products, &next_products_path, &mut summary)?;
+    replace_directory(&next_products_path, &product_root_path)?;
+    normalize_restored_database_paths(&app)?;
+
+    let status = backup_status_for_location(drive_path, backup_path.clone());
+    Ok(BackupOperationResult {
+        status,
+        backed_up: false,
+        restored: true,
+        backup_path: Some(backup_path.to_string_lossy().to_string()),
+        message: "Backup restaurado desde Google Drive.".to_string(),
     })
 }
 
@@ -602,6 +1001,9 @@ fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<
 
     fs::write(folder.join("ficha/product-sheet.txt"), payload.product_sheet)
         .map_err(|error| error.to_string())?;
+    if let Some(web_info) = payload.web_info {
+        fs::write(folder.join("ficha/info-web.txt"), web_info).map_err(|error| error.to_string())?;
+    }
     fs::write(
         folder.join("ficha/product.json"),
         serde_json::to_string_pretty(&payload.product).map_err(|error| error.to_string())?,
@@ -789,6 +1191,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             initialize_database,
+            backup_status,
+            run_backup,
+            restore_backup,
             save_product,
             list_products,
             delete_product,

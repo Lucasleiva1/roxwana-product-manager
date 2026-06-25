@@ -6,6 +6,8 @@ import {
   Barcode,
   Box,
   CloudCog,
+  CloudDownload,
+  CloudUpload,
   Copy,
   Database,
   FileCheck2,
@@ -43,9 +45,26 @@ import {
 import { useProductStore } from "../../store/useProductStore";
 import {
   deleteProduct,
+  listProducts,
   openProductPackageFolder,
   searchProducts,
 } from "../../services/desktopService";
+import {
+  formatBackupDate,
+  formatBackupSize,
+  getBackupStatus,
+  restoreBackup,
+  runBackup,
+  latestProductChange,
+  type BackupStatus,
+} from "../../services/backupService";
+import {
+  formatStockQuantity,
+  formatStockSummary,
+  hasDefinedStock,
+  hasSellableVariants,
+  totalDefinedStock,
+} from "../../lib/productLogic";
 import {
   checkOllamaStatus,
   RECOMMENDED_OLLAMA_MODELS,
@@ -125,7 +144,7 @@ function ProductDetailModal({
   const selectedVariant =
     product.variants.find((variant) => variant.id === selectedVariantId) || product.variants[0];
   const cover = product.images[0];
-  const totalStock = product.variants.reduce((sum, variant) => sum + variant.stock, 0);
+  const stockSummary = formatStockSummary(product);
 
   useEffect(() => {
     setSelectedVariantId(product.variants[0]?.id || "");
@@ -206,7 +225,7 @@ function ProductDetailModal({
               </div>
               <div>
                 <span>Stock</span>
-                <strong>{totalStock}</strong>
+                <strong>{stockSummary}</strong>
               </div>
               <div>
                 <span>Variantes</span>
@@ -278,7 +297,7 @@ function ProductDetailModal({
                           {COLOR_CATALOG[variant.colorCode].name} / {variant.sizeCode}
                         </strong>
                         <code>{variant.sku}</code>
-                        <span>{variant.stock} unidades</span>
+                        <span>{formatStockQuantity(variant.stock)}</span>
                       </button>
                     ))
                   ) : (
@@ -391,6 +410,197 @@ function readPinnedSearchProducts(): PinnedSearchProduct[] {
   }
 }
 
+function backupTone(status: BackupStatus | null): "success" | "warning" | "danger" | "neutral" {
+  if (!status) return "neutral";
+  if (!status.available) return "danger";
+  return status.backupExists ? "success" : "warning";
+}
+
+function BackupDriveControl({
+  backupRoot,
+  onRestored,
+}: {
+  backupRoot?: string;
+  onRestored?: () => void | Promise<void>;
+}) {
+  const [status, setStatus] = useState<BackupStatus | null>(null);
+  const [busy, setBusy] = useState<"status" | "backup" | "restore" | "sync" | "">("status");
+  const [message, setMessage] = useState("");
+
+  const loadStatus = async () => {
+    setBusy("status");
+    try {
+      const next = await getBackupStatus(backupRoot);
+      setStatus(next);
+      setMessage(next.message);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No pude revisar Google Drive.");
+    } finally {
+      setBusy((current) => (current === "status" ? "" : current));
+    }
+  };
+
+  useEffect(() => {
+    void loadStatus();
+  }, [backupRoot]);
+
+  const saveNow = async () => {
+    setBusy("backup");
+    try {
+      const result = await runBackup(backupRoot, "manual");
+      setStatus(result.status);
+      setMessage("Esta PC subio sus datos a Drive. Espera a que Google Drive termine de sincronizar.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No pude guardar el backup.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const restoreNow = async () => {
+    if (
+      !window.confirm(
+        "Bajar de Drive reemplaza la base local y las carpetas de productos de esta PC con la copia de Google Drive. Continuar?",
+      )
+    ) {
+      return;
+    }
+    setBusy("restore");
+    try {
+      const result = await restoreBackup(backupRoot);
+      setStatus(result.status);
+      setMessage("Esta PC bajo la copia de Drive y acomodo la base y las carpetas locales.");
+      await onRestored?.();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No pude restaurar el backup.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const updateNow = async () => {
+    setBusy("sync");
+    try {
+      const [nextStatus, products] = await Promise.all([getBackupStatus(backupRoot), listProducts()]);
+      setStatus(nextStatus);
+      if (!nextStatus.available) {
+        setMessage(nextStatus.message);
+        return;
+      }
+      if (!nextStatus.backupExists) {
+        if (!products.length) {
+          setMessage("No hay productos locales ni backup en Drive para actualizar.");
+          return;
+        }
+        const result = await runBackup(backupRoot, "smart-update-new-backup");
+        setStatus(result.status);
+        setMessage("No habia backup en Drive. Subi la copia de esta PC.");
+        return;
+      }
+
+      const driveTime = new Date(nextStatus.lastBackupAt || "").getTime() || 0;
+      const localTime = latestProductChange(products);
+      if (driveTime > localTime) {
+        if (
+          products.length > 0 &&
+          !window.confirm(
+            "Drive tiene una copia mas nueva. Actualizar va a bajar Drive y reemplazar esta PC. Continuar?",
+          )
+        ) {
+          setMessage("Actualizacion cancelada. No se cambio nada.");
+          return;
+        }
+        const result = await restoreBackup(backupRoot);
+        setStatus(result.status);
+        setMessage("Drive tenia cambios mas nuevos. Esta PC quedo actualizada.");
+        await onRestored?.();
+        return;
+      }
+
+      if (localTime > driveTime || products.length !== nextStatus.productCount) {
+        const result = await runBackup(backupRoot, "smart-update-upload");
+        setStatus(result.status);
+        setMessage("Esta PC tenia cambios. Drive quedo actualizado.");
+        return;
+      }
+
+      setMessage("Esta PC y Drive ya estan al dia.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No pude actualizar el backup.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="backup-drive">
+      <div className="backup-drive__summary">
+        <span className="backup-drive__icon">
+          <CloudCog size={20} />
+        </span>
+        <div>
+          <StatusDot status={backupTone(status)}>
+            {!status
+              ? "Revisando Drive"
+              : status.available
+                ? status.backupExists
+                  ? "Backup conectado"
+                  : "Drive detectado"
+                : "Drive no detectado"}
+          </StatusDot>
+          <strong>{formatBackupDate(status?.lastBackupAt)}</strong>
+          <small>{message || "Subi desde esta PC o baja la ultima copia que llego por Google Drive."}</small>
+        </div>
+      </div>
+
+      <div className="backup-drive__flow">
+        <span>Esta PC</span>
+        <strong>Drive</strong>
+        <span>Otra PC</span>
+      </div>
+
+      <div className="backup-drive__facts">
+        <span>
+          <small>Productos</small>
+          <strong>{status?.productCount || 0}</strong>
+        </span>
+        <span>
+          <small>Archivos</small>
+          <strong>{status?.fileCount || 0}</strong>
+        </span>
+        <span>
+          <small>Tamano</small>
+          <strong>{formatBackupSize(status?.totalBytes || 0)}</strong>
+        </span>
+      </div>
+
+      <div className="backup-drive__path">
+        <Folder size={14} />
+        <span>{status?.backupPath || backupRoot || "Carpeta de Google Drive pendiente"}</span>
+      </div>
+
+      <div className="backup-drive__actions">
+        <Button onClick={updateNow} loading={busy === "sync"} disabled={busy !== ""} variant="primary">
+          <RefreshCw size={15} /> Actualizar
+        </Button>
+        <Button onClick={saveNow} loading={busy === "backup"} disabled={busy !== ""}>
+          <CloudUpload size={15} /> Subir a Drive
+        </Button>
+        <Button
+          onClick={restoreNow}
+          loading={busy === "restore"}
+          disabled={busy !== "" || !status?.backupExists}
+        >
+          <CloudDownload size={15} /> Bajar de Drive
+        </Button>
+        <Button onClick={loadStatus} loading={busy === "status"} disabled={busy !== ""} size="sm">
+          <RefreshCw size={14} /> Revisar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function DashboardView({
   products,
   onNavigate,
@@ -398,18 +608,15 @@ export function DashboardView({
   products: ProductDraft[];
   onNavigate: (view: AppView) => void;
 }) {
-  const stock = products.reduce(
-    (sum, product) => sum + product.variants.reduce((inner, variant) => inner + variant.stock, 0),
-    0,
-  );
+  const stock = products.reduce((sum, product) => sum + totalDefinedStock(product), 0);
   const drafts = products.filter((product) => product.status === "draft").length;
   const ready = products.filter(
-    (product) => product.status !== "draft" && product.variants.some((variant) => variant.stock > 0),
+    (product) => product.status !== "draft" && hasSellableVariants(product),
   ).length;
-  const withoutStock = products.filter((product) => product.variants.every((variant) => !variant.stock)).length;
+  const madeToOrder = products.filter((product) => hasSellableVariants(product) && !hasDefinedStock(product)).length;
   const recentProducts = [...products].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
   const attentionProducts = products
-    .filter((product) => product.status === "draft" || product.variants.every((variant) => !variant.stock))
+        .filter((product) => product.status === "draft" || !hasSellableVariants(product))
     .slice(0, 5);
 
   return (
@@ -434,7 +641,7 @@ export function DashboardView({
         <StatCard label="Productos" value={products.length} note="Guardados en esta base" icon={<Box />} />
         <StatCard label="Borradores" value={drafts} note="Listos para continuar" icon={<FileOutput />} tone="blue" />
         <StatCard label="Stock total" value={stock} note="Unidades registradas" icon={<Database />} tone="green" />
-        <StatCard label="Sin stock" value={withoutStock} note="Revisar antes de publicar" icon={<AlertTriangle />} tone="orange" />
+        <StatCard label="A pedido" value={madeToOrder} note="Stock indefinido" icon={<AlertTriangle />} tone="orange" />
       </div>
 
       <div className="quick-action-grid">
@@ -511,7 +718,7 @@ export function DashboardView({
                   <span>
                     <strong>{product.name || product.modelCode || "Producto sin nombre"}</strong>
                     <small>
-                      {product.status === "draft" ? "Borrador" : "Sin stock cargado"} - {product.modelCode || "Sin codigo"}
+                      {product.status === "draft" ? "Borrador" : "Sin variantes cargadas"} - {product.modelCode || "Sin codigo"}
                     </small>
                   </span>
                   <ArrowRight size={14} />
@@ -522,7 +729,7 @@ export function DashboardView({
             <EmptyState
               icon={<PackageCheck />}
               title="Sin pendientes urgentes"
-              description="Los productos guardados tienen stock o ya salieron de borrador."
+              description="Los productos guardados tienen variantes o ya salieron de borrador."
             />
           )}
         </Panel>
@@ -551,6 +758,57 @@ export function DashboardView({
     </div>
   );
 }
+
+export function BackupView({
+  onProductsChanged,
+}: {
+  onProductsChanged: () => void | Promise<void>;
+}) {
+  const settings = useProductStore((state) => state.settings);
+
+  return (
+    <div className="page">
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">Google Drive</span>
+          <h1>Backup</h1>
+          <p>Actualizar, subir o bajar la copia de trabajo entre esta PC, Drive y otra computadora.</p>
+        </div>
+      </div>
+
+      <div className="backup-page-grid">
+        <Panel title="Sincronizacion principal" eyebrow="Subir / bajar" icon={<CloudCog size={18} />}>
+          <BackupDriveControl backupRoot={settings.backupRoot} onRestored={onProductsChanged} />
+        </Panel>
+
+        <Panel title="Como usarlo" eyebrow="Por turnos" icon={<CloudUpload size={18} />}>
+          <div className="backup-guide">
+            <div>
+              <strong>1. Boton recomendado</strong>
+              <span>Usa Actualizar. Si esta PC cambio, sube a Drive; si Drive esta mas nuevo, baja a esta PC.</span>
+            </div>
+            <div>
+              <strong>2. Controles manuales</strong>
+              <span>Usa Subir a Drive o Bajar de Drive cuando quieras forzar un sentido puntual.</span>
+            </div>
+            <div>
+              <strong>3. Espera Google Drive</strong>
+              <span>Despues de subir, espera que Drive termine de sincronizar antes de bajar en otra PC.</span>
+            </div>
+          </div>
+        </Panel>
+
+        <Panel title="Regla importante" eyebrow="Evitar pisadas" icon={<AlertTriangle size={18} />}>
+          <p className="backup-warning">
+            No trabajes en dos computadoras al mismo tiempo. El sistema esta pensado para una sola persona
+            moviendo la copia por turnos entre PCs.
+          </p>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
 export function ProductsView({
   products,
   onOpen,
@@ -607,9 +865,6 @@ export function ProductsView({
       setOpeningFolderId(null);
     }
   };
-
-  const totalStock = (product: ProductDraft) =>
-    product.variants.reduce((sum, variant) => sum + variant.stock, 0);
 
   const productCover = (product: ProductDraft) => (
     <div className="product-card__cover">
@@ -772,7 +1027,7 @@ export function ProductsView({
                 )}
                 <div className="product-card__meta">
                   <span>{product.variants.length} variantes</span>
-                  <span>{totalStock(product)} unidades</span>
+                  <span>{formatStockSummary(product)}</span>
                   {viewMode === "detail" && (
                     <>
                       <span>{product.colors.length} colores</span>
@@ -1024,17 +1279,14 @@ export function HistoryView({
   onOpen: (product: ProductDraft) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "draft" | "no_stock" | "active">("all");
+  const [filter, setFilter] = useState<"all" | "draft" | "made_to_order" | "active">("all");
   const [copiedCode, setCopiedCode] = useState("");
-
-  const totalStock = (product: ProductDraft) =>
-    product.variants.reduce((sum, variant) => sum + variant.stock, 0);
 
   const timeline = [...products]
     .filter((product) => {
       if (filter === "draft" && product.status !== "draft") return false;
-      if (filter === "no_stock" && totalStock(product) > 0) return false;
-      if (filter === "active" && (product.status === "draft" || totalStock(product) <= 0)) return false;
+      if (filter === "made_to_order" && (hasDefinedStock(product) || !hasSellableVariants(product))) return false;
+      if (filter === "active" && (product.status === "draft" || !hasSellableVariants(product))) return false;
       const haystack = `${product.name} ${product.modelCode} ${product.status} ${product.category}`.toLowerCase();
       return haystack.includes(query.toLowerCase());
     })
@@ -1050,8 +1302,8 @@ export function HistoryView({
   const filterOptions = [
     ["all", "Todos", products.length],
     ["draft", "Borradores", products.filter((product) => product.status === "draft").length],
-    ["no_stock", "Sin stock", products.filter((product) => totalStock(product) <= 0).length],
-    ["active", "Activos", products.filter((product) => product.status !== "draft" && totalStock(product) > 0).length],
+    ["made_to_order", "A pedido", products.filter((product) => hasSellableVariants(product) && !hasDefinedStock(product)).length],
+    ["active", "Activos", products.filter((product) => product.status !== "draft" && hasSellableVariants(product)).length],
   ] as const;
 
   return (
@@ -1101,11 +1353,11 @@ export function HistoryView({
         {timeline.length ? (
           <div className="history-list">
             {timeline.map((product) => {
-              const stock = totalStock(product);
+              const madeToOrder = hasSellableVariants(product) && !hasDefinedStock(product);
               return (
                 <article key={product.id} className="history-item">
                   <div className="history-item__mark">
-                    <i className={stock <= 0 ? "warning" : product.status === "draft" ? "draft" : "ready"} />
+                    <i className={madeToOrder ? "warning" : product.status === "draft" ? "draft" : "ready"} />
                   </div>
                   <div className="history-item__main">
                     <div className="history-item__title">
@@ -1113,8 +1365,8 @@ export function HistoryView({
                         <strong>{product.name || "Producto sin nombre"}</strong>
                         <small>Modificado {new Date(product.updatedAt).toLocaleString("es-AR")}</small>
                       </span>
-                      <StatusDot status={product.status === "draft" ? "warning" : stock <= 0 ? "danger" : "success"}>
-                        {stock <= 0 ? "sin stock" : product.status}
+                      <StatusDot status={product.status === "draft" || madeToOrder ? "warning" : "success"}>
+                        {madeToOrder ? "a pedido" : product.status}
                       </StatusDot>
                     </div>
                     <div className="history-code-row">
@@ -1131,7 +1383,7 @@ export function HistoryView({
                     <div className="history-meta">
                       <span>{formatPrice(product.price)}</span>
                       <span>{product.variants.length} variantes</span>
-                      <span>{stock} unidades</span>
+                      <span>{formatStockSummary(product)}</span>
                       <span>{product.colors.length} colores</span>
                       <span>Creado {new Date(product.createdAt).toLocaleDateString("es-AR")}</span>
                     </div>
@@ -1156,7 +1408,13 @@ export function HistoryView({
     </div>
   );
 }
-export function SettingsView({ appMode }: { appMode: "desktop" | "browser" }) {
+export function SettingsView({
+  appMode,
+  onProductsChanged,
+}: {
+  appMode: "desktop" | "browser";
+  onProductsChanged: () => void | Promise<void>;
+}) {
   const { settings, setSettings } = useProductStore();
   const [form, setForm] = useState<AppSettings>(settings);
   const [ollama, setOllama] = useState<{ connected: boolean; models: string[] }>({
@@ -1224,6 +1482,47 @@ export function SettingsView({ appMode }: { appMode: "desktop" | "browser" }) {
           />
         </Panel>
         <div className="settings-side">
+          <Panel title="Backup en Google Drive" eyebrow="Drive local" icon={<CloudCog size={18} />}>
+            <div className="settings-fields">
+              <BackupDriveControl backupRoot={form.backupRoot} onRestored={onProductsChanged} />
+              <div className="settings-toggle-row">
+                <span>
+                  <strong>Backup automatico</strong>
+                  <small>Solo sube si esta PC tiene cambios mas nuevos que el backup de Drive.</small>
+                </span>
+                <Toggle
+                  checked={form.backupEnabled}
+                  onChange={(checked) => setForm((current) => ({ ...current, backupEnabled: checked }))}
+                />
+              </div>
+              <label>
+                <span>Frecuencia automatica</span>
+                <select
+                  value={form.backupFrequencyDays}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, backupFrequencyDays: Number(event.target.value) }))
+                  }
+                >
+                  <option value={3}>Cada 3 dias</option>
+                  <option value={5}>Cada 5 dias</option>
+                  <option value={7}>Una vez por semana</option>
+                  <option value={15}>Cada 15 dias</option>
+                </select>
+              </label>
+              <label>
+                <span>Carpeta de backup opcional</span>
+                <input
+                  value={form.backupRoot}
+                  placeholder="Vacio = detectar Google Drive automaticamente"
+                  onChange={(event) => setForm((current) => ({ ...current, backupRoot: event.target.value }))}
+                />
+              </label>
+              <p className="settings-note">
+                Flujo por turnos: en una PC usas Subir a Drive, esperas la sincronizacion de Google Drive,
+                y en la otra PC usas Bajar de Drive.
+              </p>
+            </div>
+          </Panel>
           <Panel title="Ollama local" eyebrow="IA privada" icon={<Sparkles size={18} />}>
             <div className="settings-fields">
               <label>

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatStockQuantity,
+  formatStockSummary,
   generateDescriptions,
   generateVariants,
   applyBriefToDraft,
@@ -116,6 +118,25 @@ describe("lógica de producto ROXWANA", () => {
     });
     const sheet = makeProductSheet(draft);
     expect(sheet).toContain("RXW-REM-RCK001-NEG-M | M | NEG | 2");
+  });
+
+  it("trata stock cero como indefinido y no como sin stock", () => {
+    const draft = applyBriefToDraft(draftWithUniqueModel(), {
+      garmentType: "REM",
+      colors: ["NEG"],
+      sizes: ["S", "M"],
+    });
+    const issues = validateProduct({
+      ...draft,
+      name: "Producto a pedido",
+      gender: "unisex",
+      technique: "DTF",
+      price: 10000,
+    });
+    expect(formatStockQuantity(0)).toBe("Indefinido");
+    expect(formatStockSummary(draft)).toBe("Indefinido");
+    expect(issues.some((issue) => issue.field === "stock")).toBe(false);
+    expect(makeProductSheet(draft)).toContain("indefinido");
   });
 
   it("regenera una versión local diferente de la descripción", () => {

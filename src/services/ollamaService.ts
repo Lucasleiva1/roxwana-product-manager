@@ -141,6 +141,7 @@ function assistantPrompt(input: string, instructions: string, context: ProductAs
 
 Sos la inteligencia operativa de ROXWANA Product Manager. La aplicación te entrega abajo su
 contexto real: ficha activa, catálogo guardado, variantes, SKU, stock, imágenes y conversación.
+Stock 0 significa stock indefinido o producto a pedido, no significa agotado.
 Usalo para responder consultas y editar la ficha. No digas que necesitás "entrar" a otra pantalla:
 si el dato figura en el contexto, ya lo tenés. Si no figura, decí con claridad que no está registrado.
 
@@ -618,7 +619,7 @@ export function askMissingQuestions(draft: ProductDraft) {
       field: "stock",
       question: "¿Cuántas unidades hay disponibles por talle?",
       required: false,
-      missing: !draft.variants.some((variant) => variant.stock > 0),
+      missing: !draft.variants.length,
     },
     {
       field: "collectionDrop",

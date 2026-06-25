@@ -167,4 +167,7 @@ export interface AppSettings {
   whisperModel: string;
   whisperLanguage: string;
   creatorActionLabels: boolean;
+  backupEnabled: boolean;
+  backupFrequencyDays: number;
+  backupRoot: string;
 }
