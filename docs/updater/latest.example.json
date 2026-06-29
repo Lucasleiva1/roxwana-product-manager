@@ -1,11 +1,11 @@
 {
-  "version": "0.2.5",
-  "notes": "Corrige la visualizacion de portadas locales de productos en la app instalada.",
+  "version": "0.2.6",
+  "notes": "Agrega backup automatico en Google Drive cada vez que se guarda un producto.",
   "pub_date": "2026-06-29T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "PEGAR_ACA_EL_CONTENIDO_REAL_DEL_ARCHIVO_SIG",
-      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.5/ROXWANA.Product.Manager_0.2.5_x64-setup.exe"
+      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.6/ROXWANA.Product.Manager_0.2.6_x64-setup.exe"
     }
   }
 }

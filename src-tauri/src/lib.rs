@@ -1126,9 +1126,8 @@ fn backup_status(backup_root: Option<String>) -> Result<BackupStatus, String> {
     }
 }
 
-#[tauri::command]
-fn run_backup(
-    app: AppHandle,
+fn run_backup_operation(
+    app: &AppHandle,
     backup_root: Option<String>,
     reason: Option<String>,
 ) -> Result<BackupOperationResult, String> {
@@ -1140,9 +1139,9 @@ fn run_backup(
     remove_path(&next)?;
     fs::create_dir_all(next.join("data")).map_err(|error| error.to_string())?;
 
-    let db_path = database_path(&app)?;
-    let product_root_path = product_root(&app)?;
-    let db_connection = connection(&app)?;
+    let db_path = database_path(app)?;
+    let product_root_path = product_root(app)?;
+    let db_connection = connection(app)?;
     let product_count = db_connection
         .query_row("SELECT COUNT(*) FROM products", [], |row| {
             row.get::<_, i64>(0)
@@ -1188,6 +1187,25 @@ fn run_backup(
         backup_path: Some(backup_path.to_string_lossy().to_string()),
         message: "Backup guardado en Google Drive.".to_string(),
     })
+}
+
+fn run_required_save_backup(app: &AppHandle, reason: &str) -> Result<(), String> {
+    run_backup_operation(app, None, Some(reason.to_string()))
+        .map(|_| ())
+        .map_err(|error| {
+            format!(
+                "El producto se guardo localmente, pero no pude subir el backup automatico a Drive: {error}"
+            )
+        })
+}
+
+#[tauri::command]
+fn run_backup(
+    app: AppHandle,
+    backup_root: Option<String>,
+    reason: Option<String>,
+) -> Result<BackupOperationResult, String> {
+    run_backup_operation(&app, backup_root, reason)
 }
 
 #[tauri::command]
@@ -1396,6 +1414,7 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
             .map_err(|error| error.to_string())?;
     }
     transaction.commit().map_err(|error| error.to_string())?;
+    run_required_save_backup(&app, &format!("auto-save-product-{}", input.model_code))?;
 
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
@@ -1556,6 +1575,7 @@ fn write_product_files(
         serde_json::to_string_pretty(&product).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    run_required_save_backup(&app, &format!("auto-save-files-{}", input.model_code))?;
     Ok(SheetResult {
         sheet_path: sheet_path.to_string_lossy().to_string(),
     })
