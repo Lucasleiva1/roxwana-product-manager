@@ -207,9 +207,7 @@ fn data_root(app: &AppHandle) -> Result<PathBuf, String> {
     if current.join("package.json").exists() {
         return Ok(current);
     }
-    app.path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())
+    app.path().app_data_dir().map_err(|error| error.to_string())
 }
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -289,6 +287,145 @@ fn safe_file_name(value: &str, fallback: &str) -> String {
     }
 }
 
+fn image_file_match_score(
+    filename: &str,
+    image_number: Option<i64>,
+    color_code: Option<&str>,
+    device: Option<&str>,
+) -> i32 {
+    let lower = filename.to_lowercase();
+    let mut score = 0;
+    if let Some(number) = image_number {
+        let padded = format!("{number:02}");
+        if lower.contains(&format!("-{padded}-")) || lower.starts_with(&format!("{padded}-")) {
+            score += 8;
+        }
+    }
+    if let Some(color) = color_code {
+        let color = color.to_lowercase();
+        if !color.is_empty() && (lower.starts_with(&color) || lower.contains(&format!("-{color}-")))
+        {
+            score += 4;
+        }
+    }
+    if let Some(device) = device {
+        let device = device.to_lowercase();
+        if !device.is_empty() && lower.contains(&device) {
+            score += 2;
+        }
+    }
+    score
+}
+
+fn is_supported_image_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_lowercase)
+            .as_deref(),
+        Some("webp" | "png" | "jpg" | "jpeg" | "avif")
+    )
+}
+
+fn resolve_restored_image_path(
+    folder: &Path,
+    preferred_name: &str,
+    fallback_name: &str,
+    image_number: Option<i64>,
+    color_code: Option<&str>,
+    device: Option<&str>,
+) -> PathBuf {
+    let safe_preferred = safe_file_name(preferred_name, fallback_name);
+    let preferred_path = folder.join(&safe_preferred);
+    if preferred_path.exists() {
+        return preferred_path;
+    }
+
+    let mut best: Option<(i32, PathBuf)> = None;
+    if let Ok(entries) = fs::read_dir(folder) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if !is_supported_image_file(&path) {
+                continue;
+            }
+            let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let score = image_file_match_score(filename, image_number, color_code, device);
+            let score = if score > 0 { score } else { 1 };
+            if best
+                .as_ref()
+                .map_or(true, |(best_score, _)| score > *best_score)
+            {
+                best = Some((score, path));
+            }
+        }
+    }
+
+    best.map(|(_, path)| path).unwrap_or(preferred_path)
+}
+
+fn resolve_restored_display_image_path(
+    product_folder: &Path,
+    preferred_final_name: &str,
+    original_name: &str,
+    image_number: Option<i64>,
+    color_code: Option<&str>,
+    device: Option<&str>,
+) -> PathBuf {
+    let image_folders = [
+        product_folder.join("imagenes/webp"),
+        product_folder.join("imagenes/aprobadas"),
+        product_folder.join("imagenes/originales"),
+    ];
+    for preferred_name in [preferred_final_name, original_name] {
+        for folder in &image_folders {
+            let path = folder.join(safe_file_name(preferred_name, "imagen"));
+            if path.exists() && is_supported_image_file(&path) {
+                return path;
+            }
+        }
+    }
+
+    let mut best: Option<(i32, PathBuf)> = None;
+    for (folder_index, folder) in image_folders.iter().enumerate() {
+        let folder_priority = match folder_index {
+            0 => 3,
+            1 => 2,
+            _ => 1,
+        };
+        if let Ok(entries) = fs::read_dir(folder) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() || !is_supported_image_file(&path) {
+                    continue;
+                }
+                let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                let matched_score =
+                    image_file_match_score(filename, image_number, color_code, device);
+                let score = if matched_score > 0 { matched_score } else { 1 } + folder_priority;
+                if best
+                    .as_ref()
+                    .map_or(true, |(best_score, _)| score > *best_score)
+                {
+                    best = Some((score, path));
+                }
+            }
+        }
+    }
+
+    best.map(|(_, path)| path).unwrap_or_else(|| {
+        product_folder
+            .join("imagenes/webp")
+            .join(safe_file_name(preferred_final_name, "imagen.webp"))
+    })
+}
+
 fn decode_data_url(value: &str) -> Result<Vec<u8>, String> {
     let encoded = value
         .split_once(',')
@@ -299,20 +436,30 @@ fn decode_data_url(value: &str) -> Result<Vec<u8>, String> {
 
 fn open_folder_with_explorer(folder: &Path) -> Result<(), String> {
     if !folder.exists() {
-        return Err(format!("La carpeta no existe: {}", folder.to_string_lossy()));
+        return Err(format!(
+            "La carpeta no existe: {}",
+            folder.to_string_lossy()
+        ));
     }
     Command::new("explorer.exe")
         .arg(folder)
         .spawn()
-        .map_err(|error| format!("No pude abrir la carpeta '{}': {}", folder.to_string_lossy(), error))?;
+        .map_err(|error| {
+            format!(
+                "No pude abrir la carpeta '{}': {}",
+                folder.to_string_lossy(),
+                error
+            )
+        })?;
     Ok(())
 }
 
 fn parse_http_endpoint(endpoint: &str) -> Result<(String, u16, String), String> {
     let trimmed = endpoint.trim().trim_end_matches('/');
-    let without_scheme = trimmed
-        .strip_prefix("http://")
-        .ok_or_else(|| "Ollama local debe usar una direccion http://, por ejemplo http://localhost:11434.".to_string())?;
+    let without_scheme = trimmed.strip_prefix("http://").ok_or_else(|| {
+        "Ollama local debe usar una direccion http://, por ejemplo http://localhost:11434."
+            .to_string()
+    })?;
     let (host_port, base_path) = without_scheme
         .split_once('/')
         .map(|(host, path)| (host, format!("/{path}")))
@@ -396,7 +543,9 @@ fn request_ollama_json(
     }
 
     let body_bytes = match body {
-        Some(value) if !value.is_null() => serde_json::to_vec(&value).map_err(|error| error.to_string())?,
+        Some(value) if !value.is_null() => {
+            serde_json::to_vec(&value).map_err(|error| error.to_string())?
+        }
         _ => Vec::new(),
     };
     let mut request = format!(
@@ -423,11 +572,16 @@ fn request_ollama_json(
     stream
         .set_write_timeout(Some(Duration::from_secs(10)))
         .map_err(|error| error.to_string())?;
-    stream.write_all(&request).map_err(|error| error.to_string())?;
+    stream
+        .write_all(&request)
+        .map_err(|error| error.to_string())?;
 
     let mut response = Vec::new();
-    stream.read_to_end(&mut response).map_err(|error| error.to_string())?;
-    let header_end = find_header_end(&response).ok_or_else(|| "Respuesta HTTP invalida de Ollama.".to_string())?;
+    stream
+        .read_to_end(&mut response)
+        .map_err(|error| error.to_string())?;
+    let header_end = find_header_end(&response)
+        .ok_or_else(|| "Respuesta HTTP invalida de Ollama.".to_string())?;
     let headers = String::from_utf8_lossy(&response[..header_end]);
     let status = headers
         .lines()
@@ -436,7 +590,10 @@ fn request_ollama_json(
         .and_then(|status| status.parse::<u16>().ok())
         .ok_or_else(|| "No pude leer el estado HTTP de Ollama.".to_string())?;
     let mut body_bytes = response[header_end + 4..].to_vec();
-    if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+    if headers
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         body_bytes = decode_chunked_body(&body_bytes)?;
     }
     if !(200..300).contains(&status) {
@@ -483,7 +640,9 @@ fn find_google_drive_root() -> Option<PathBuf> {
     candidates.into_iter().find(|path| is_existing_dir(path))
 }
 
-fn resolve_backup_location(backup_root: Option<String>) -> Result<(Option<PathBuf>, PathBuf), String> {
+fn resolve_backup_location(
+    backup_root: Option<String>,
+) -> Result<(Option<PathBuf>, PathBuf), String> {
     if let Some(path) = backup_root
         .as_deref()
         .map(str::trim)
@@ -493,7 +652,10 @@ fn resolve_backup_location(backup_root: Option<String>) -> Result<(Option<PathBu
         return Ok((backup_path.parent().map(Path::to_path_buf), backup_path));
     }
     if let Some(drive_path) = find_google_drive_root() {
-        return Ok((Some(drive_path.clone()), drive_path.join(BACKUP_FOLDER_NAME)));
+        return Ok((
+            Some(drive_path.clone()),
+            drive_path.join(BACKUP_FOLDER_NAME),
+        ));
     }
     Err("No pude detectar Google Drive en esta PC. Abrilo una vez o configura una carpeta de backup.".to_string())
 }
@@ -541,17 +703,27 @@ fn replace_file(next: &Path, current: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn copy_file_with_summary(source: &Path, destination: &Path, summary: &mut CopySummary) -> Result<(), String> {
+fn copy_file_with_summary(
+    source: &Path,
+    destination: &Path,
+    summary: &mut CopySummary,
+) -> Result<(), String> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     fs::copy(source, destination).map_err(|error| error.to_string())?;
     summary.file_count += 1;
-    summary.total_bytes += fs::metadata(source).map(|metadata| metadata.len()).unwrap_or(0);
+    summary.total_bytes += fs::metadata(source)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     Ok(())
 }
 
-fn copy_dir_all(source: &Path, destination: &Path, summary: &mut CopySummary) -> Result<(), String> {
+fn copy_dir_all(
+    source: &Path,
+    destination: &Path,
+    summary: &mut CopySummary,
+) -> Result<(), String> {
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
     if !source.exists() {
         return Ok(());
@@ -586,7 +758,10 @@ fn backup_status_for_location(drive_path: Option<PathBuf>, backup_path: PathBuf)
         drive_path: drive_path.map(|path| path.to_string_lossy().to_string()),
         backup_path: Some(backup_path.to_string_lossy().to_string()),
         last_backup_at: manifest.as_ref().map(|item| item.created_at.clone()),
-        product_count: manifest.as_ref().map(|item| item.product_count).unwrap_or(0),
+        product_count: manifest
+            .as_ref()
+            .map(|item| item.product_count)
+            .unwrap_or(0),
         file_count: manifest.as_ref().map(|item| item.file_count).unwrap_or(0),
         total_bytes: manifest.as_ref().map(|item| item.total_bytes).unwrap_or(0),
         message: if manifest.is_some() {
@@ -632,10 +807,26 @@ fn normalize_restored_database_paths(app: &AppHandle) -> Result<(), String> {
 
     for (id, model_code, product_json) in products {
         let folder = product_folder(app, &model_code)?;
-        let mut product: Value = serde_json::from_str(&product_json).map_err(|error| error.to_string())?;
+        let mut product: Value =
+            serde_json::from_str(&product_json).map_err(|error| error.to_string())?;
+        let mut image_records: Vec<(String, String, String)> = Vec::new();
         if let Some(images) = product.get_mut("images").and_then(Value::as_array_mut) {
             for image in images {
                 if let Some(object) = image.as_object_mut() {
+                    let image_id = object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let image_number = object.get("imageNumber").and_then(Value::as_i64);
+                    let color_code = object
+                        .get("colorCode")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let device = object
+                        .get("device")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
                     let original_name = object
                         .get("originalName")
                         .and_then(Value::as_str)
@@ -646,27 +837,42 @@ fn normalize_restored_database_paths(app: &AppHandle) -> Result<(), String> {
                         .and_then(Value::as_str)
                         .unwrap_or("imagen.webp")
                         .to_string();
+                    let original_path = resolve_restored_image_path(
+                        &folder.join("imagenes/originales"),
+                        &original_name,
+                        "imagen-original",
+                        image_number,
+                        color_code.as_deref(),
+                        device.as_deref(),
+                    );
+                    let final_path = resolve_restored_display_image_path(
+                        &folder,
+                        &final_filename,
+                        &original_name,
+                        image_number,
+                        color_code.as_deref(),
+                        device.as_deref(),
+                    );
+                    let original_path_text = original_path.to_string_lossy().to_string();
+                    let final_path_text = final_path.to_string_lossy().to_string();
+                    if let Some(filename) = final_path.file_name().and_then(|name| name.to_str()) {
+                        object.insert(
+                            "finalFilename".to_string(),
+                            Value::String(filename.to_string()),
+                        );
+                    }
                     object.insert(
                         "originalPath".to_string(),
-                        Value::String(
-                            folder
-                                .join("imagenes/originales")
-                                .join(safe_file_name(&original_name, "imagen-original"))
-                                .to_string_lossy()
-                                .to_string(),
-                        ),
+                        Value::String(original_path_text.clone()),
                     );
                     object.insert(
                         "finalPath".to_string(),
-                        Value::String(
-                            folder
-                                .join("imagenes/webp")
-                                .join(safe_file_name(&final_filename, "imagen.webp"))
-                                .to_string_lossy()
-                                .to_string(),
-                        ),
+                        Value::String(final_path_text.clone()),
                     );
                     object.remove("previewUrl");
+                    if !image_id.is_empty() {
+                        image_records.push((image_id, original_path_text, final_path_text));
+                    }
                 }
             }
         }
@@ -681,6 +887,14 @@ fn normalize_restored_database_paths(app: &AppHandle) -> Result<(), String> {
                 ],
             )
             .map_err(|error| error.to_string())?;
+        for (image_id, original_path, final_path) in image_records {
+            connection
+                .execute(
+                    "UPDATE product_images SET original_path = ?1, final_path = ?2 WHERE id = ?3",
+                    params![original_path, final_path, image_id],
+                )
+                .map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }
@@ -697,6 +911,7 @@ fn initialize_database(app: AppHandle) -> Result<DatabaseInfo, String> {
             .join("productos"),
     )
     .map_err(|error| error.to_string())?;
+    normalize_restored_database_paths(&app)?;
     Ok(DatabaseInfo {
         database_path: path.to_string_lossy().to_string(),
     })
@@ -738,7 +953,9 @@ fn run_backup(
     let product_root_path = product_root(&app)?;
     let db_connection = connection(&app)?;
     let product_count = db_connection
-        .query_row("SELECT COUNT(*) FROM products", [], |row| row.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM products", [], |row| {
+            row.get::<_, i64>(0)
+        })
         .map_err(|error| error.to_string())?;
     let backup_db_path = next.join("data").join("roxwana.db");
     let backup_db_arg = backup_db_path.to_string_lossy().to_string();
@@ -783,7 +1000,10 @@ fn run_backup(
 }
 
 #[tauri::command]
-fn restore_backup(app: AppHandle, backup_root: Option<String>) -> Result<BackupOperationResult, String> {
+fn restore_backup(
+    app: AppHandle,
+    backup_root: Option<String>,
+) -> Result<BackupOperationResult, String> {
     let (drive_path, backup_path) = resolve_backup_location(backup_root)?;
     let current = backup_path.join("current");
     if !manifest_path(&backup_path).exists() {
@@ -827,7 +1047,8 @@ fn restore_backup(app: AppHandle, backup_root: Option<String>) -> Result<BackupO
 
 #[tauri::command]
 fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> {
-    let input: ProductInput = serde_json::from_value(product.clone()).map_err(|error| error.to_string())?;
+    let input: ProductInput =
+        serde_json::from_value(product.clone()).map_err(|error| error.to_string())?;
     let folder = product_folder(&app, &input.model_code)?;
     create_folder_structure(&folder)?;
     fs::write(
@@ -836,10 +1057,13 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
     )
     .map_err(|error| error.to_string())?;
     if !input.notes.trim().is_empty() {
-        fs::write(folder.join("notas/notas.txt"), &input.notes).map_err(|error| error.to_string())?;
+        fs::write(folder.join("notas/notas.txt"), &input.notes)
+            .map_err(|error| error.to_string())?;
     }
     let connection = connection(&app)?;
-    let transaction = connection.unchecked_transaction().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
 
     transaction
         .execute(
@@ -909,7 +1133,10 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
         .map_err(|error| error.to_string())?;
 
     transaction
-        .execute("DELETE FROM variants WHERE product_id = ?1", params![input.id])
+        .execute(
+            "DELETE FROM variants WHERE product_id = ?1",
+            params![input.id],
+        )
         .map_err(|error| error.to_string())?;
     for variant in input.variants {
         transaction
@@ -932,7 +1159,10 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
     }
 
     transaction
-        .execute("DELETE FROM product_images WHERE product_id = ?1", params![input.id])
+        .execute(
+            "DELETE FROM product_images WHERE product_id = ?1",
+            params![input.id],
+        )
         .map_err(|error| error.to_string())?;
     for image in input.images {
         transaction
@@ -965,6 +1195,7 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
 
 #[tauri::command]
 fn list_products(app: AppHandle) -> Result<Vec<Value>, String> {
+    normalize_restored_database_paths(&app)?;
     let connection = connection(&app)?;
     let mut statement = connection
         .prepare("SELECT product_json FROM products ORDER BY updated_at DESC")
@@ -1003,15 +1234,26 @@ fn delete_product(app: AppHandle, product_id: String) -> Result<(), String> {
             })?;
         }
     }
-    let transaction = connection.unchecked_transaction().map_err(|error| error.to_string())?;
-    transaction
-        .execute("DELETE FROM ai_messages WHERE product_id = ?1", params![product_id])
+    let transaction = connection
+        .unchecked_transaction()
         .map_err(|error| error.to_string())?;
     transaction
-        .execute("DELETE FROM product_images WHERE product_id = ?1", params![product_id])
+        .execute(
+            "DELETE FROM ai_messages WHERE product_id = ?1",
+            params![product_id],
+        )
         .map_err(|error| error.to_string())?;
     transaction
-        .execute("DELETE FROM variants WHERE product_id = ?1", params![product_id])
+        .execute(
+            "DELETE FROM product_images WHERE product_id = ?1",
+            params![product_id],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM variants WHERE product_id = ?1",
+            params![product_id],
+        )
         .map_err(|error| error.to_string())?;
     transaction
         .execute("DELETE FROM products WHERE id = ?1", params![product_id])
@@ -1072,10 +1314,12 @@ fn create_product_folder(
     product: Value,
     product_sheet: String,
 ) -> Result<FolderResult, String> {
-    let input: ProductInput = serde_json::from_value(product.clone()).map_err(|error| error.to_string())?;
+    let input: ProductInput =
+        serde_json::from_value(product.clone()).map_err(|error| error.to_string())?;
     let folder = product_folder(&app, &input.model_code)?;
     create_folder_structure(&folder)?;
-    fs::write(folder.join("ficha/product-sheet.txt"), product_sheet).map_err(|error| error.to_string())?;
+    fs::write(folder.join("ficha/product-sheet.txt"), product_sheet)
+        .map_err(|error| error.to_string())?;
     fs::write(
         folder.join("ficha/product.json"),
         serde_json::to_string_pretty(&product).map_err(|error| error.to_string())?,
@@ -1092,7 +1336,8 @@ fn write_product_files(
     product: Value,
     product_sheet: String,
 ) -> Result<SheetResult, String> {
-    let input: ProductInput = serde_json::from_value(product.clone()).map_err(|error| error.to_string())?;
+    let input: ProductInput =
+        serde_json::from_value(product.clone()).map_err(|error| error.to_string())?;
     let folder = product_folder(&app, &input.model_code)?;
     create_folder_structure(&folder)?;
     let sheet_path = folder.join("ficha/product-sheet.txt");
@@ -1207,16 +1452,23 @@ fn restart_app(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<FolderResult, String> {
+fn save_product_package(
+    app: AppHandle,
+    payload: ProductPackageInput,
+) -> Result<FolderResult, String> {
     let input: ProductInput =
         serde_json::from_value(payload.product.clone()).map_err(|error| error.to_string())?;
     let folder = product_folder(&app, &input.model_code)?;
     create_folder_structure(&folder)?;
 
-    fs::write(folder.join("ficha/product-sheet.txt"), payload.product_sheet)
-        .map_err(|error| error.to_string())?;
+    fs::write(
+        folder.join("ficha/product-sheet.txt"),
+        payload.product_sheet,
+    )
+    .map_err(|error| error.to_string())?;
     if let Some(web_info) = payload.web_info {
-        fs::write(folder.join("ficha/info-web.txt"), web_info).map_err(|error| error.to_string())?;
+        fs::write(folder.join("ficha/info-web.txt"), web_info)
+            .map_err(|error| error.to_string())?;
     }
     fs::write(
         folder.join("ficha/product.json"),
@@ -1224,7 +1476,8 @@ fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<
     )
     .map_err(|error| error.to_string())?;
     if !input.notes.trim().is_empty() {
-        fs::write(folder.join("notas/notas.txt"), input.notes).map_err(|error| error.to_string())?;
+        fs::write(folder.join("notas/notas.txt"), input.notes)
+            .map_err(|error| error.to_string())?;
     }
 
     for image in payload.images {
@@ -1234,7 +1487,8 @@ fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<
         let webp_path = folder.join("imagenes/webp").join(&final_name);
 
         if let Some(data_url) = image.original_data_url {
-            fs::write(&original_path, decode_data_url(&data_url)?).map_err(|error| error.to_string())?;
+            fs::write(&original_path, decode_data_url(&data_url)?)
+                .map_err(|error| error.to_string())?;
         } else if let Some(source_path) = image.original_path {
             let source = PathBuf::from(source_path);
             if source.exists() {
@@ -1243,7 +1497,8 @@ fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<
         }
 
         if let Some(data_url) = image.webp_data_url {
-            fs::write(&webp_path, decode_data_url(&data_url)?).map_err(|error| error.to_string())?;
+            fs::write(&webp_path, decode_data_url(&data_url)?)
+                .map_err(|error| error.to_string())?;
         } else if let Some(source_path) = image.final_path {
             let source = PathBuf::from(source_path);
             if source.exists() {
@@ -1252,13 +1507,19 @@ fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<
         }
 
         if image.approved && webp_path.exists() {
-            fs::copy(&webp_path, folder.join("imagenes/aprobadas").join(final_name))
-                .map_err(|error| error.to_string())?;
+            fs::copy(
+                &webp_path,
+                folder.join("imagenes/aprobadas").join(final_name),
+            )
+            .map_err(|error| error.to_string())?;
         }
     }
 
     if let Some(image) = payload.whatsapp_image {
-        let name = safe_file_name(&image.original_name, &format!("{}-whatsapp.jpg", input.model_code));
+        let name = safe_file_name(
+            &image.original_name,
+            &format!("{}-whatsapp.jpg", input.model_code),
+        );
         fs::write(
             folder.join("imagenes").join("whatsapp").join(name),
             decode_data_url(&image.data_url)?,
@@ -1268,13 +1529,22 @@ fn save_product_package(app: AppHandle, payload: ProductPackageInput) -> Result<
 
     for barcode in payload.barcodes {
         let sku = safe_file_name(&barcode.sku, "sku");
-        fs::write(folder.join("codigos-barra").join(format!("{sku}.svg")), barcode.svg)
-            .map_err(|error| error.to_string())?;
+        fs::write(
+            folder.join("codigos-barra").join(format!("{sku}.svg")),
+            barcode.svg,
+        )
+        .map_err(|error| error.to_string())?;
         let png_bytes = decode_data_url(&barcode.png_data_url)?;
-        fs::write(folder.join("codigos-barra").join(format!("{sku}.png")), &png_bytes)
-            .map_err(|error| error.to_string())?;
-        fs::write(folder.join("impresion").join(format!("{sku}.png")), png_bytes)
-            .map_err(|error| error.to_string())?;
+        fs::write(
+            folder.join("codigos-barra").join(format!("{sku}.png")),
+            &png_bytes,
+        )
+        .map_err(|error| error.to_string())?;
+        fs::write(
+            folder.join("impresion").join(format!("{sku}.png")),
+            png_bytes,
+        )
+        .map_err(|error| error.to_string())?;
     }
 
     save_print_files_to_folder(&folder, payload.print_files)?;
@@ -1291,7 +1561,9 @@ fn save_print_files_to_folder(
     if print_files.is_empty() {
         return Ok(());
     }
-    let folder = product_folder.join("impresion").join("trabajos-para-impresion");
+    let folder = product_folder
+        .join("impresion")
+        .join("trabajos-para-impresion");
     fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
     for file in print_files {
         if let Some(data_url) = file.data_url {
@@ -1305,12 +1577,20 @@ fn save_print_files_to_folder(
 }
 
 #[tauri::command]
-fn save_print_files(app: AppHandle, model_code: String, print_files: Vec<PackagePrintFileInput>) -> Result<FolderResult, String> {
+fn save_print_files(
+    app: AppHandle,
+    model_code: String,
+    print_files: Vec<PackagePrintFileInput>,
+) -> Result<FolderResult, String> {
     let folder = product_folder(&app, &model_code)?;
     create_folder_structure(&folder)?;
     save_print_files_to_folder(&folder, print_files)?;
     Ok(FolderResult {
-        folder_path: folder.join("impresion").join("trabajos-para-impresion").to_string_lossy().to_string(),
+        folder_path: folder
+            .join("impresion")
+            .join("trabajos-para-impresion")
+            .to_string_lossy()
+            .to_string(),
     })
 }
 
@@ -1331,7 +1611,12 @@ fn transcribe_audio(
     if sample_count == 0 || average_energy / sample_count as u64 <= 180 {
         return Ok(TranscriptionResult {
             text: String::new(),
-            language: if language.trim().is_empty() { "auto" } else { &language }.to_string(),
+            language: if language.trim().is_empty() {
+                "auto"
+            } else {
+                &language
+            }
+            .to_string(),
         });
     }
     let audio_path = std::env::temp_dir().join(format!(
@@ -1396,7 +1681,10 @@ fn transcribe_audio(
     let output = output?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Whisper no pudo transcribir el audio: {}", stderr.trim()));
+        return Err(format!(
+            "Whisper no pudo transcribir el audio: {}",
+            stderr.trim()
+        ));
     }
 
     let transcript_path = output_base.with_extension("txt");

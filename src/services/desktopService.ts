@@ -68,7 +68,7 @@ function hydrateDesktopProduct(product: ProductDraft): ProductDraft {
     ...product,
     images: product.images.map((image) => ({
       ...image,
-      previewUrl: image.previewUrl || (image.finalPath ? convertFileSrc(image.finalPath) : undefined),
+      previewUrl: image.finalPath ? convertFileSrc(image.finalPath) : image.previewUrl,
     })),
   };
 }
@@ -102,7 +102,7 @@ export async function restartApp() {
 
 export async function saveProduct(product: ProductDraft) {
   if (isTauri()) {
-    return invoke<{ folderPath: string }>("save_product", { product });
+    return invoke<{ folderPath: string }>("save_product", { product: packageProduct(product) });
   }
   const products = readLocalProducts();
   const index = products.findIndex((item) => item.id === product.id);

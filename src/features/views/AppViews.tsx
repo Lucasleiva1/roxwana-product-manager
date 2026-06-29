@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import JsBarcode from "jsbarcode";
 import {
   AlertTriangle,
@@ -39,6 +39,7 @@ import {
   COLOR_CATALOG,
   GARMENT_TYPES,
   type AppSettings,
+  type ProductImage,
   type ProductDraft,
   type ProductVariant,
 } from "../../types/product";
@@ -86,6 +87,38 @@ function formatDate(value: string) {
     month: "short",
     year: "numeric",
   }).format(new Date(value));
+}
+
+function coverImage(product: ProductDraft) {
+  const isCover = (image: ProductDraft["images"][number]) => image.imageNumber === 1 || image.role === "portada";
+  return (
+    product.images.find((image) => isCover(image) && image.previewUrl) ??
+    product.images.find((image) => image.previewUrl) ??
+    product.images.find(isCover) ??
+    product.images[0]
+  );
+}
+
+function imageMimeType(filename: string) {
+  const extension = filename.split(".").pop()?.toLowerCase();
+  if (extension === "png") return "image/png";
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  if (extension === "avif") return "image/avif";
+  return "image/webp";
+}
+
+function fileUriFromPath(path?: string) {
+  if (!path) return "";
+  const normalized = path.replace(/\\/g, "/").replace(/^\/+/, "");
+  return `file:///${encodeURI(normalized)}`;
+}
+
+function escapeHtmlAttribute(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+function imageFilename(product: ProductDraft, image?: ProductImage) {
+  return image?.finalFilename || image?.originalName || `${product.modelCode || product.name || "portada"}.webp`;
 }
 
 function ProductBarcodePreview({ variant }: { variant?: ProductVariant }) {
@@ -144,7 +177,7 @@ function ProductDetailModal({
   const [copied, setCopied] = useState("");
   const selectedVariant =
     product.variants.find((variant) => variant.id === selectedVariantId) || product.variants[0];
-  const cover = product.images[0];
+  const cover = coverImage(product);
   const stockSummary = formatStockSummary(product);
 
   useEffect(() => {
@@ -821,16 +854,41 @@ export function ProductsView({
 }) {
   const [filter, setFilter] = useState("");
   const [viewMode, setViewMode] = useState<"cards" | "list" | "detail">("cards");
-  const [copiedCode, setCopiedCode] = useState("");
+  const [copiedMessage, setCopiedMessage] = useState("");
   const [productNotice, setProductNotice] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [openingFolderId, setOpeningFolderId] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<ProductDraft | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProductDraft | null>(null);
   const [deleteError, setDeleteError] = useState("");
+  const dragImageFiles = useRef(new Map<string, File>());
   const visible = products.filter((product) =>
     `${product.name} ${product.modelCode} ${product.status}`.toLowerCase().includes(filter.toLowerCase()),
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    visible.forEach((product) => {
+      const cover = coverImage(product);
+      if (!cover?.previewUrl || dragImageFiles.current.has(cover.id)) return;
+      fetch(cover.previewUrl)
+        .then((response) => (response.ok ? response.blob() : null))
+        .then((blob) => {
+          if (!blob || cancelled) return;
+          const filename = imageFilename(product, cover);
+          dragImageFiles.current.set(
+            cover.id,
+            new File([blob], filename, { type: blob.type || imageMimeType(filename) }),
+          );
+        })
+        .catch(() => {
+          // Dragging still falls back to URL data when the image cannot be preloaded as a File.
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
 
   const removeProduct = async (product: ProductDraft) => {
     setDeletingId(product.id);
@@ -867,21 +925,64 @@ export function ProductsView({
     }
   };
 
-  const productCover = (product: ProductDraft) => (
-    <div className="product-card__cover">
-      {product.images[0]?.previewUrl ? (
-        <img src={product.images[0].previewUrl} alt={product.name} />
-      ) : (
-        <>
-          <span className="brand-word">RXW</span>
-          <small>PRODUCT STUDIO</small>
-        </>
-      )}
-      <StatusDot status={product.status === "draft" ? "warning" : "success"}>
-        {product.status}
-      </StatusDot>
-    </div>
-  );
+  const copyProductValue = (label: string, value: string) => {
+    const text = value.trim();
+    if (!text) return;
+    void navigator.clipboard.writeText(text);
+    setCopiedMessage(`${label} copiado`);
+    window.setTimeout(() => setCopiedMessage((current) => (current === `${label} copiado` ? "" : current)), 1800);
+  };
+
+  const handleCoverDragStart = (
+    event: DragEvent<HTMLImageElement>,
+    product: ProductDraft,
+    cover: ProductImage,
+  ) => {
+    const filename = imageFilename(product, cover);
+    const fileUri = fileUriFromPath(cover.finalPath || cover.originalPath);
+    const source = fileUri || cover.previewUrl || "";
+    if (!source) return;
+
+    event.dataTransfer.effectAllowed = "copy";
+    const file = dragImageFiles.current.get(cover.id);
+    if (file) {
+      event.dataTransfer.items.add(file);
+    }
+    event.dataTransfer.setData("text/plain", source);
+    event.dataTransfer.setData("text/uri-list", source);
+    event.dataTransfer.setData(
+      "text/html",
+      `<img src="${escapeHtmlAttribute(source)}" alt="${escapeHtmlAttribute(product.name || product.modelCode)}">`,
+    );
+    event.dataTransfer.setData("DownloadURL", `${imageMimeType(filename)}:${filename}:${source}`);
+    if (cover.previewUrl) event.dataTransfer.setData("URL", cover.previewUrl);
+    event.dataTransfer.setDragImage(event.currentTarget, event.currentTarget.width / 2, event.currentTarget.height / 2);
+  };
+
+  const productCover = (product: ProductDraft) => {
+    const cover = coverImage(product);
+    return (
+      <div className="product-card__cover">
+        {cover?.previewUrl ? (
+          <img
+            src={cover.previewUrl}
+            alt={product.name}
+            draggable
+            onDragStart={(event) => handleCoverDragStart(event, product, cover)}
+            title="Arrastrar portada"
+          />
+        ) : (
+          <>
+            <span className="brand-word">RXW</span>
+            <small>PRODUCT STUDIO</small>
+          </>
+        )}
+        <StatusDot status={product.status === "draft" ? "warning" : "success"}>
+          {product.status}
+        </StatusDot>
+      </div>
+    );
+  };
 
   const productActions = (product: ProductDraft) => (
     <div className="product-actions">
@@ -912,34 +1013,57 @@ export function ProductsView({
     </div>
   );
 
-  const copyProductCode = (code: string) => {
-    if (!code) return;
-    void navigator.clipboard.writeText(code);
-    setCopiedCode(code);
-    window.setTimeout(() => setCopiedCode((current) => (current === code ? "" : current)), 1800);
-  };
+  const inlineCopyButton = (label: string, value: string) => (
+    <button
+      type="button"
+      className="product-inline-copy"
+      onClick={() => copyProductValue(label, value)}
+      disabled={!value.trim()}
+      title={`Copiar ${label.toLowerCase()}`}
+      aria-label={`Copiar ${label.toLowerCase()}`}
+    >
+      <Copy size={13} />
+    </button>
+  );
 
   const productCode = (product: ProductDraft) => (
     <div className="product-code-copy">
       <code>{product.modelCode || "Sin codigo"}</code>
-      <button
-        type="button"
-        onClick={() => copyProductCode(product.modelCode)}
-        disabled={!product.modelCode}
-        title="Copiar codigo"
-        aria-label={`Copiar codigo ${product.modelCode || "del producto"}`}
-      >
-        <Copy size={13} />
-      </button>
+      {inlineCopyButton("Codigo", product.modelCode)}
     </div>
   );
 
+  const copyDescriptionButton = (product: ProductDraft) => {
+    const description = product.shortDescription || product.longDescription;
+    return (
+      <button
+        type="button"
+        className="product-description-copy"
+        onClick={() => copyProductValue("Descripcion", description)}
+        disabled={!description.trim()}
+      >
+        <Copy size={12} />
+        Copiar descripcion
+      </button>
+    );
+  };
+
+  const productPrice = (product: ProductDraft) => {
+    const price = formatPrice(product.price);
+    return (
+      <div className="product-price-copy">
+        <strong>{price}</strong>
+        {inlineCopyButton("Precio", price)}
+      </div>
+    );
+  };
+
   return (
     <div className="page">
-      {copiedCode && (
+      {copiedMessage && (
         <div className="toast">
           <Copy size={17} />
-          Codigo copiado: {copiedCode}
+          {copiedMessage}
         </div>
       )}
       {productNotice && (
@@ -1019,13 +1143,12 @@ export function ProductsView({
               {productCover(product)}
               <div className="product-card__body">
                 <span className="eyebrow">{product.category}</span>
-                <h3>{product.name}</h3>
+                <div className="product-card__title">
+                  <h3>{product.name}</h3>
+                  {inlineCopyButton("Nombre", product.name)}
+                </div>
                 {productCode(product)}
-                {viewMode === "detail" && (
-                  <p className="product-card__description">
-                    {product.shortDescription || product.longDescription || "Sin descripción todavía."}
-                  </p>
-                )}
+                {copyDescriptionButton(product)}
                 <div className="product-card__meta">
                   <span>{product.variants.length} variantes</span>
                   <span>{formatStockSummary(product)}</span>
@@ -1037,7 +1160,7 @@ export function ProductsView({
                   )}
                 </div>
                 <div className="product-card__footer">
-                  <strong>{formatPrice(product.price)}</strong>
+                  {productPrice(product)}
                   {productActions(product)}
                 </div>
               </div>
@@ -1169,15 +1292,17 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
       <Panel title="Resultados" eyebrow={query ? `Consulta: ${query}` : "Ingresá una consulta"}>
         {visibleResults.length ? (
           <div className={`search-results search-results--${viewMode}`}>
-            {visibleResults.map((product) => (
-              <article key={product.id}>
-                <span className="search-result__cover">
-                  {product.images[0]?.previewUrl ? (
-                    <img src={product.images[0].previewUrl} alt="" />
-                  ) : (
-                    <PackageCheck size={24} />
-                  )}
-                </span>
+            {visibleResults.map((product) => {
+              const cover = coverImage(product);
+              return (
+                <article key={product.id}>
+                  <span className="search-result__cover">
+                    {cover?.previewUrl ? (
+                      <img src={cover.previewUrl} alt="" />
+                    ) : (
+                      <PackageCheck size={24} />
+                    )}
+                  </span>
                 <div>
                   <h3>{product.name}</h3>
                   <code>{product.modelCode}</code>
@@ -1208,8 +1333,9 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
                     Editar
                   </Button>
                 </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         ) : (
           <EmptyState
@@ -1231,15 +1357,17 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
           className="pinned-products-panel"
         >
           <div className="pinned-products">
-            {pinnedProducts.map(({ product, viewMode: pinnedViewMode }) => (
-              <article className={`pinned-products__item pinned-products__item--${pinnedViewMode}`} key={product.id}>
-                <span className="pinned-products__cover">
-                  {product.images[0]?.previewUrl ? (
-                    <img src={product.images[0].previewUrl} alt="" />
-                  ) : (
-                    <PackageCheck size={22} />
-                  )}
-                </span>
+            {pinnedProducts.map(({ product, viewMode: pinnedViewMode }) => {
+              const cover = coverImage(product);
+              return (
+                <article className={`pinned-products__item pinned-products__item--${pinnedViewMode}`} key={product.id}>
+                  <span className="pinned-products__cover">
+                    {cover?.previewUrl ? (
+                      <img src={cover.previewUrl} alt="" />
+                    ) : (
+                      <PackageCheck size={22} />
+                    )}
+                  </span>
                 <div>
                   <h3>{product.name || product.modelCode}</h3>
                   <code>{product.modelCode}</code>
@@ -1263,8 +1391,9 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
                     <PinOff size={14} /> Desanclar
                   </Button>
                 </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         </Panel>
       )}

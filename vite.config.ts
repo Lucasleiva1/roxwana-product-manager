@@ -28,6 +28,87 @@ function safeName(value: string, fallback: string) {
   return clean || fallback;
 }
 
+function imageFileMatchScore(filename: string, imageNumber?: number, colorCode?: string, device?: string) {
+  const lower = filename.toLowerCase();
+  let score = 0;
+  if (imageNumber) {
+    const padded = String(imageNumber).padStart(2, "0");
+    if (lower.includes(`-${padded}-`) || lower.startsWith(`${padded}-`)) score += 8;
+  }
+  if (colorCode) {
+    const color = colorCode.toLowerCase();
+    if (lower.startsWith(color) || lower.includes(`-${color}-`)) score += 4;
+  }
+  if (device && lower.includes(device.toLowerCase())) score += 2;
+  return score;
+}
+
+function isSupportedImageFile(path: string) {
+  return /\.(webp|png|jpe?g|avif)$/i.test(path);
+}
+
+function resolveRestoredImagePath(
+  folder: string,
+  preferredName: string,
+  fallbackName: string,
+  imageNumber?: number,
+  colorCode?: string,
+  device?: string,
+) {
+  const preferredPath = join(folder, safeName(preferredName, fallbackName));
+  if (existsSync(preferredPath)) return preferredPath;
+
+  let best: { score: number; path: string } | null = null;
+  if (existsSync(folder)) {
+    for (const filename of readdirSync(folder)) {
+      const path = join(folder, filename);
+      if (!statSync(path).isFile()) continue;
+      if (!isSupportedImageFile(path)) continue;
+      const matchedScore = imageFileMatchScore(filename, imageNumber, colorCode, device);
+      const score = matchedScore > 0 ? matchedScore : 1;
+      if (!best || score > best.score) best = { score, path };
+    }
+  }
+  return best?.path || preferredPath;
+}
+
+function resolveRestoredDisplayImagePath(
+  productFolder: string,
+  preferredFinalName: string,
+  originalName: string,
+  imageNumber?: number,
+  colorCode?: string,
+  device?: string,
+) {
+  const imageFolders = [
+    join(productFolder, "imagenes", "webp"),
+    join(productFolder, "imagenes", "aprobadas"),
+    join(productFolder, "imagenes", "originales"),
+  ];
+
+  for (const preferredName of [preferredFinalName, originalName]) {
+    for (const folder of imageFolders) {
+      const path = join(folder, safeName(preferredName, "imagen"));
+      if (existsSync(path) && isSupportedImageFile(path)) return path;
+    }
+  }
+
+  let best: { score: number; path: string } | null = null;
+  imageFolders.forEach((folder, folderIndex) => {
+    const folderPriority = folderIndex === 0 ? 3 : folderIndex === 1 ? 2 : 1;
+    if (!existsSync(folder)) return;
+    for (const filename of readdirSync(folder)) {
+      const path = join(folder, filename);
+      if (!statSync(path).isFile() || !isSupportedImageFile(path)) continue;
+      const matchedScore = imageFileMatchScore(filename, imageNumber, colorCode, device);
+      const score = (matchedScore > 0 ? matchedScore : 1) + folderPriority;
+      if (!best || score > best.score) best = { score, path };
+    }
+  });
+
+  return best?.path || join(productFolder, "imagenes", "webp", safeName(preferredFinalName, "imagen.webp"));
+}
+
 function productPackageFolder(modelCode: string) {
   return join(PRODUCT_PACKAGE_ROOT, "productos", safeName(modelCode, "producto-sin-codigo"));
 }
@@ -286,13 +367,28 @@ function normalizeRestoredDatabasePaths() {
       const folder = productPackageFolder(row.model_code);
       const product = JSON.parse(row.product_json);
       product.images = (product.images || []).map((image: any) => {
-        const originalName = safeName(image.originalName, "imagen-original");
-        const finalName = safeName(image.finalFilename, "imagen.webp");
+        const originalPath = resolveRestoredImagePath(
+          join(folder, "imagenes", "originales"),
+          image.originalName,
+          "imagen-original",
+          image.imageNumber,
+          image.colorCode,
+          image.device,
+        );
+        const finalPath = resolveRestoredDisplayImagePath(
+          folder,
+          image.finalFilename,
+          image.originalName,
+          image.imageNumber,
+          image.colorCode,
+          image.device,
+        );
         const { previewUrl, ...next } = image;
         return {
           ...next,
-          originalPath: join(folder, "imagenes", "originales", originalName),
-          finalPath: join(folder, "imagenes", "webp", finalName),
+          finalFilename: basename(finalPath),
+          originalPath,
+          finalPath,
         };
       });
       update.run(folder, JSON.stringify(product), row.id);
