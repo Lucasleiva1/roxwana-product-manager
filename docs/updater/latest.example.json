@@ -1,11 +1,11 @@
 {
-  "version": "0.2.4",
-  "notes": "Corrige portadas de productos restaurados, estados WhatsApp/Web y actualizacion de escritorio.",
+  "version": "0.2.5",
+  "notes": "Corrige la visualizacion de portadas locales de productos en la app instalada.",
   "pub_date": "2026-06-29T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "PEGAR_ACA_EL_CONTENIDO_REAL_DEL_ARCHIVO_SIG",
-      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.4/ROXWANA.Product.Manager_0.2.4_x64-setup.exe"
+      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.5/ROXWANA.Product.Manager_0.2.5_x64-setup.exe"
     }
   }
 }
