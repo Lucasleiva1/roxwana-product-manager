@@ -2381,7 +2381,7 @@ textarea:focus-visible {
 
 .product-grid--list .product-card__body {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.7fr) auto minmax(180px, 0.9fr) auto;
+  grid-template-columns: minmax(160px, 1fr) minmax(120px, 0.7fr) minmax(92px, 0.35fr) auto minmax(180px, 0.9fr) auto;
   align-items: center;
   gap: 14px;
 }
@@ -2418,6 +2418,39 @@ textarea:focus-visible {
 .product-card code {
   color: #9aa3a7;
   font-size: 8px;
+}
+
+.publication-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 7px 0 0;
+}
+
+.publication-badge {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  padding: 4px 7px;
+  border: 1px solid rgba(121, 132, 138, 0.32);
+  border-radius: 999px;
+  color: #7d878c;
+  background: rgba(7, 10, 12, 0.7);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.publication-badge--active {
+  border-color: rgba(217, 168, 102, 0.72);
+  color: #f5d7a8;
+  background: rgba(217, 168, 102, 0.13);
+  box-shadow: 0 0 0 1px rgba(217, 168, 102, 0.08) inset;
+}
+
+.product-grid--list .publication-badges {
+  margin: 0;
+  flex-wrap: nowrap;
 }
 
 .product-code-copy code {
@@ -2568,6 +2601,25 @@ textarea:focus-visible {
   color: var(--text);
   background: transparent;
   font-size: 14px;
+}
+
+.app-update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 18px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 168, 102, 0.32);
+  border-radius: 8px;
+  color: var(--text);
+  background: #12191d;
+}
+
+.app-update-banner > span {
+  min-width: 0;
+  flex: 1;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .search-results {
@@ -3090,6 +3142,60 @@ textarea:focus-visible {
   height: 10px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 50%;
+}
+
+.product-viewer__publication {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.publication-toggle {
+  display: grid;
+  min-height: 74px;
+  gap: 4px;
+  padding: 11px;
+  border: 1px solid #303a40;
+  border-radius: 8px;
+  color: #858f94;
+  background: #080c0e;
+  text-align: left;
+}
+
+.publication-toggle span {
+  color: #d9d0c0;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.publication-toggle strong {
+  color: #879197;
+  font-size: 10px;
+}
+
+.publication-toggle small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.publication-toggle--active {
+  border-color: rgba(217, 168, 102, 0.74);
+  background: rgba(217, 168, 102, 0.1);
+}
+
+.publication-toggle--active strong {
+  color: #f0c886;
+}
+
+.publication-toggle:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.product-viewer__publication-message {
+  margin: 9px 0 0;
+  color: var(--gold);
+  font-size: 9px;
 }
 
 .product-viewer__barcode-section {

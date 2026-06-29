@@ -252,6 +252,7 @@ fn create_folder_structure(folder: &Path) -> Result<(), String> {
         "ficha",
         "imagenes/originales",
         "imagenes/webp",
+        "imagenes/portada",
         "imagenes/aprobadas",
         "imagenes/whatsapp",
         "estampas",
@@ -292,9 +293,19 @@ fn image_file_match_score(
     image_number: Option<i64>,
     color_code: Option<&str>,
     device: Option<&str>,
+    role: Option<&str>,
 ) -> i32 {
     let lower = filename.to_lowercase();
     let mut score = 0;
+    if let Some(role) = role {
+        let role = role.to_lowercase();
+        if role.contains("portada") {
+            score += 12;
+        }
+    }
+    if lower.contains("portada") || lower.contains("cover") || lower.contains("frente") {
+        score += 10;
+    }
     if let Some(number) = image_number {
         let padded = format!("{number:02}");
         if lower.contains(&format!("-{padded}-")) || lower.starts_with(&format!("{padded}-")) {
@@ -315,6 +326,77 @@ fn image_file_match_score(
         }
     }
     score
+}
+
+fn image_folder_score(path: &Path) -> i32 {
+    let text = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    if text.contains("/imagenes/portada/") {
+        return 80;
+    }
+    if text.contains("/imagenes/webp/") {
+        return 70;
+    }
+    if text.contains("/imagenes/aprobadas/") {
+        return 60;
+    }
+    if text.contains("/imagenes/originales/") {
+        return 50;
+    }
+    if text.contains("/imagenes/whatsapp/") {
+        return 30;
+    }
+    if text.contains("/imagenes/") {
+        return 10;
+    }
+    0
+}
+
+fn is_product_display_image_candidate(path: &Path) -> bool {
+    let text = path.to_string_lossy().replace('\\', "/").to_lowercase();
+    is_supported_image_file(path)
+        && text.contains("/imagenes/")
+        && !text.contains("/codigos-barra/")
+        && !text.contains("/impresion/")
+        && !text.contains("/ficha/")
+        && !text.contains("/notas/")
+}
+
+fn collect_image_candidates(folder: &Path, candidates: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(folder) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_image_candidates(&path, candidates);
+            } else if is_product_display_image_candidate(&path) {
+                candidates.push(path);
+            }
+        }
+    }
+}
+
+fn best_image_candidate(
+    root: &Path,
+    image_number: Option<i64>,
+    color_code: Option<&str>,
+    device: Option<&str>,
+    role: Option<&str>,
+) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    collect_image_candidates(root, &mut candidates);
+    candidates
+        .into_iter()
+        .filter_map(|path| {
+            let filename = path.file_name().and_then(|name| name.to_str())?;
+            let matched_score = image_file_match_score(filename, image_number, color_code, device, role);
+            let score = image_folder_score(&path) + if matched_score > 0 { matched_score } else { 1 };
+            Some((score, path))
+        })
+        .max_by(|(score_a, path_a), (score_b, path_b)| {
+            score_a
+                .cmp(score_b)
+                .then_with(|| path_b.to_string_lossy().cmp(&path_a.to_string_lossy()))
+        })
+        .map(|(_, path)| path)
 }
 
 fn is_supported_image_file(path: &Path) -> bool {
@@ -354,7 +436,7 @@ fn resolve_restored_image_path(
             let Some(filename) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            let score = image_file_match_score(filename, image_number, color_code, device);
+            let score = image_file_match_score(filename, image_number, color_code, device, None);
             let score = if score > 0 { score } else { 1 };
             if best
                 .as_ref()
@@ -375,11 +457,14 @@ fn resolve_restored_display_image_path(
     image_number: Option<i64>,
     color_code: Option<&str>,
     device: Option<&str>,
+    role: Option<&str>,
 ) -> PathBuf {
     let image_folders = [
+        product_folder.join("imagenes/portada"),
         product_folder.join("imagenes/webp"),
         product_folder.join("imagenes/aprobadas"),
         product_folder.join("imagenes/originales"),
+        product_folder.join("imagenes/whatsapp"),
     ];
     for preferred_name in [preferred_final_name, original_name] {
         for folder in &image_folders {
@@ -393,8 +478,10 @@ fn resolve_restored_display_image_path(
     let mut best: Option<(i32, PathBuf)> = None;
     for (folder_index, folder) in image_folders.iter().enumerate() {
         let folder_priority = match folder_index {
-            0 => 3,
-            1 => 2,
+            0 => 6,
+            1 => 5,
+            2 => 4,
+            3 => 3,
             _ => 1,
         };
         if let Ok(entries) = fs::read_dir(folder) {
@@ -407,7 +494,7 @@ fn resolve_restored_display_image_path(
                     continue;
                 };
                 let matched_score =
-                    image_file_match_score(filename, image_number, color_code, device);
+                    image_file_match_score(filename, image_number, color_code, device, role);
                 let score = if matched_score > 0 { matched_score } else { 1 } + folder_priority;
                 if best
                     .as_ref()
@@ -419,11 +506,46 @@ fn resolve_restored_display_image_path(
         }
     }
 
-    best.map(|(_, path)| path).unwrap_or_else(|| {
+    best
+        .map(|(_, path)| path)
+        .or_else(|| best_image_candidate(product_folder, image_number, color_code, device, role))
+        .unwrap_or_else(|| {
         product_folder
             .join("imagenes/webp")
             .join(safe_file_name(preferred_final_name, "imagen.webp"))
-    })
+        })
+}
+
+fn ensure_cover_image_path(
+    product_folder: &Path,
+    model_code: &str,
+    source: &Path,
+) -> Result<PathBuf, String> {
+    if !source.exists() || !is_supported_image_file(source) {
+        return Ok(source.to_path_buf());
+    }
+    let portada_folder = product_folder.join("imagenes/portada");
+    fs::create_dir_all(&portada_folder).map_err(|error| error.to_string())?;
+    if source.starts_with(&portada_folder) {
+        return Ok(source.to_path_buf());
+    }
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("webp")
+        .to_lowercase();
+    let target = portada_folder.join(safe_file_name(
+        &format!("{model_code}-portada.{extension}"),
+        "portada.webp",
+    ));
+    fs::copy(source, &target).map_err(|error| {
+        format!(
+            "No pude preparar la imagen de portada '{}': {}",
+            source.to_string_lossy(),
+            error
+        )
+    })?;
+    Ok(target)
 }
 
 fn decode_data_url(value: &str) -> Result<Vec<u8>, String> {
@@ -809,7 +931,15 @@ fn normalize_restored_database_paths(app: &AppHandle) -> Result<(), String> {
         let folder = product_folder(app, &model_code)?;
         let mut product: Value =
             serde_json::from_str(&product_json).map_err(|error| error.to_string())?;
+        let default_color_code = product
+            .get("colors")
+            .and_then(Value::as_array)
+            .and_then(|colors| colors.first())
+            .and_then(Value::as_str)
+            .unwrap_or("NEG")
+            .to_string();
         let mut image_records: Vec<(String, String, String)> = Vec::new();
+        let mut has_display_image = false;
         if let Some(images) = product.get_mut("images").and_then(Value::as_array_mut) {
             for image in images {
                 if let Some(object) = image.as_object_mut() {
@@ -825,6 +955,10 @@ fn normalize_restored_database_paths(app: &AppHandle) -> Result<(), String> {
                         .map(str::to_string);
                     let device = object
                         .get("device")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let role = object
+                        .get("role")
                         .and_then(Value::as_str)
                         .map(str::to_string);
                     let original_name = object
@@ -852,9 +986,23 @@ fn normalize_restored_database_paths(app: &AppHandle) -> Result<(), String> {
                         image_number,
                         color_code.as_deref(),
                         device.as_deref(),
+                        role.as_deref(),
                     );
+                    let is_cover = image_number == Some(1)
+                        || role
+                            .as_deref()
+                            .map(|value| value.eq_ignore_ascii_case("portada"))
+                            .unwrap_or(false);
+                    let final_path = if is_cover {
+                        ensure_cover_image_path(&folder, &model_code, &final_path)?
+                    } else {
+                        final_path
+                    };
                     let original_path_text = original_path.to_string_lossy().to_string();
                     let final_path_text = final_path.to_string_lossy().to_string();
+                    if final_path.exists() {
+                        has_display_image = true;
+                    }
                     if let Some(filename) = final_path.file_name().and_then(|name| name.to_str()) {
                         object.insert(
                             "finalFilename".to_string(),
@@ -872,6 +1020,49 @@ fn normalize_restored_database_paths(app: &AppHandle) -> Result<(), String> {
                     object.remove("previewUrl");
                     if !image_id.is_empty() {
                         image_records.push((image_id, original_path_text, final_path_text));
+                    }
+                }
+            }
+        }
+        if !has_display_image {
+            if let Some(candidate) =
+                best_image_candidate(&folder, Some(1), None, Some("desktop"), Some("portada"))
+            {
+                let cover_path = ensure_cover_image_path(&folder, &model_code, &candidate)?;
+                if cover_path.exists() {
+                    let filename = cover_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("portada.webp")
+                        .to_string();
+                    let cover_path_text = cover_path.to_string_lossy().to_string();
+                    let image_id = format!(
+                        "image-{}-portada",
+                        safe_file_name(&model_code, "producto").to_lowercase()
+                    );
+                    let cover_image = serde_json::json!({
+                        "id": image_id,
+                        "colorCode": default_color_code,
+                        "imageNumber": 1,
+                        "device": "desktop",
+                        "role": "portada",
+                        "originalName": filename,
+                        "originalPath": cover_path_text,
+                        "finalFilename": filename,
+                        "finalPath": cover_path_text,
+                        "approved": true
+                    });
+                    let object = product
+                        .as_object_mut()
+                        .ok_or_else(|| "Producto invalido en la base.".to_string())?;
+                    let images = object
+                        .entry("images".to_string())
+                        .or_insert_with(|| Value::Array(Vec::new()));
+                    if !images.is_array() {
+                        *images = Value::Array(Vec::new());
+                    }
+                    if let Some(images) = images.as_array_mut() {
+                        images.insert(0, cover_image);
                     }
                 }
             }
@@ -1006,6 +1197,8 @@ fn restore_backup(
 ) -> Result<BackupOperationResult, String> {
     let (drive_path, backup_path) = resolve_backup_location(backup_root)?;
     let current = backup_path.join("current");
+    let manifest = read_backup_manifest(&backup_path)
+        .ok_or_else(|| "No encontre un backup de ROXWANA en Google Drive.".to_string())?;
     if !manifest_path(&backup_path).exists() {
         return Err("No encontre un backup de ROXWANA en Google Drive.".to_string());
     }
@@ -1014,24 +1207,40 @@ fn restore_backup(
     if !backup_db_path.exists() {
         return Err("El backup no tiene la base de datos roxwana.db.".to_string());
     }
+    let backup_products = current.join("productos");
+    if !backup_products.exists() {
+        return Err(
+            "El backup de Drive todavia no tiene la carpeta productos. Espera a que Google Drive termine de sincronizar."
+                .to_string(),
+        );
+    }
 
     let db_path = database_path(&app)?;
+    let product_root_path = product_root(&app)?;
+    let next_db_path = db_path.with_extension("restore.tmp");
+    let next_products_path = product_root_path.with_extension("restore.tmp");
+    remove_path(&next_db_path)?;
+    remove_path(&next_products_path)?;
+    fs::copy(&backup_db_path, &next_db_path).map_err(|error| error.to_string())?;
+
+    let mut summary = CopySummary::default();
+    copy_dir_all(&backup_products, &next_products_path, &mut summary)?;
+    if manifest.product_count > 0 && summary.file_count == 0 {
+        remove_path(&next_db_path)?;
+        remove_path(&next_products_path)?;
+        return Err(
+            "Google Drive todavia no termino de descargar las carpetas de productos del backup."
+                .to_string(),
+        );
+    }
+
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     remove_sqlite_sidecars(&db_path);
-    let next_db_path = db_path.with_extension("restore.tmp");
-    remove_path(&next_db_path)?;
-    fs::copy(&backup_db_path, &next_db_path).map_err(|error| error.to_string())?;
     replace_file(&next_db_path, &db_path)?;
     remove_sqlite_sidecars(&db_path);
 
-    let backup_products = current.join("productos");
-    let product_root_path = product_root(&app)?;
-    let next_products_path = product_root_path.with_extension("restore.tmp");
-    remove_path(&next_products_path)?;
-    let mut summary = CopySummary::default();
-    copy_dir_all(&backup_products, &next_products_path, &mut summary)?;
     replace_directory(&next_products_path, &product_root_path)?;
     normalize_restored_database_paths(&app)?;
 
@@ -1700,6 +1909,8 @@ fn transcribe_audio(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             initialize_database,
             backup_status,

@@ -77,6 +77,11 @@ export interface ProductVariant {
   barcodeValue: string;
 }
 
+export interface ProductPublication {
+  whatsapp: boolean;
+  web: boolean;
+}
+
 export interface ProductDraft {
   id: string;
   modelCode: string;
@@ -99,6 +104,7 @@ export interface ProductDraft {
   shortDescription: string;
   longDescription: string;
   whatsappText: string;
+  publication: ProductPublication;
   tags: string[];
   notes: string;
   colors: ColorCode[];

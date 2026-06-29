@@ -4,6 +4,7 @@ import {
   Boxes,
   ChevronDown,
   Cloud,
+  CloudDownload,
   CloudUpload,
   FolderClock,
   Gauge,
@@ -17,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { initializeDesktop, listProducts } from "../services/desktopService";
+import { Button } from "../components/ui";
 import {
   formatBackupDate,
   getBackupStatus,
@@ -25,6 +27,12 @@ import {
   shouldRunAutomaticBackup,
   type BackupStatus,
 } from "../services/backupService";
+import {
+  checkForUpdates,
+  downloadAndInstallUpdate,
+  type UpdateCheckResult,
+  type UpdateInstallStatus,
+} from "../services/updateService";
 import { useProductStore } from "../store/useProductStore";
 import type { ProductDraft } from "../types/product";
 import Studio from "../features/studio/Studio";
@@ -70,6 +78,9 @@ function App() {
   const [appMode, setAppMode] = useState<"desktop" | "browser">("browser");
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [backupMessage, setBackupMessage] = useState("Backup sin revisar");
+  const [startupUpdate, setStartupUpdate] = useState<UpdateCheckResult | null>(null);
+  const [startupInstall, setStartupInstall] = useState<UpdateInstallStatus | null>(null);
+  const [startupUpdateBusy, setStartupUpdateBusy] = useState(false);
   const setDraft = useProductStore((state) => state.setDraft);
   const resetDraft = useProductStore((state) => state.resetDraft);
   const draft = useProductStore((state) => state.draft);
@@ -83,6 +94,24 @@ function App() {
 
   const refreshProducts = async () => {
     await loadProducts();
+  };
+
+  const checkStartupUpdate = async () => {
+    const result = await checkForUpdates();
+    if (result.status === "available") {
+      setStartupUpdate(result);
+    }
+  };
+
+  const installStartupUpdate = async () => {
+    if (startupUpdate?.status !== "available") return;
+    const accepted = window.confirm(
+      `Hay una nueva actualizacion disponible: ${startupUpdate.version}.\n\nQueres instalarla ahora? La app se va a reiniciar al terminar.`,
+    );
+    if (!accepted) return;
+    setStartupUpdateBusy(true);
+    await downloadAndInstallUpdate(startupUpdate.update, setStartupInstall);
+    setStartupUpdateBusy(false);
   };
 
   useEffect(() => {
@@ -135,6 +164,9 @@ function App() {
       setAppMode(mode);
       await loadProducts();
       if (mode === "desktop") {
+        void checkStartupUpdate().catch(() => {
+          // The startup check must never block local work.
+        });
         try {
           await syncBackup("startup");
         } catch (error) {
@@ -190,7 +222,7 @@ function App() {
       case "products":
         return <ProductsView products={products} onOpen={openProduct} onRefresh={refreshProducts} />;
       case "search":
-        return <SearchView onOpen={openProduct} />;
+        return <SearchView onOpen={openProduct} onProductsChanged={refreshProducts} />;
       case "backup":
         return <BackupView onProductsChanged={refreshProducts} />;
       case "history":
@@ -280,6 +312,23 @@ function App() {
             </button>
           </div>
         </header>
+
+        {startupUpdate?.status === "available" && (
+          <div className="app-update-banner">
+            <CloudDownload size={17} />
+            <span>
+              Nueva version disponible: {startupUpdate.version}
+              {startupInstall ? ` · ${startupInstall.message}` : ""}
+              {startupInstall && typeof startupInstall.progress === "number" ? ` ${startupInstall.progress}%` : ""}
+            </span>
+            <Button size="sm" variant="primary" onClick={() => void installStartupUpdate()} loading={startupUpdateBusy}>
+              Instalar ahora
+            </Button>
+            <Button size="sm" onClick={() => setStartupUpdate(null)} disabled={startupUpdateBusy}>
+              Despues
+            </Button>
+          </div>
+        )}
 
         <div className="workspace__content" key={view}>
           {renderView()}

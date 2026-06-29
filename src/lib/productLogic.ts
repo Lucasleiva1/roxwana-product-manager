@@ -559,6 +559,10 @@ export function makeEmptyDraft(): ProductDraft {
     shortDescription: "",
     longDescription: "",
     whatsappText: "",
+    publication: {
+      whatsapp: false,
+      web: false,
+    },
     tags: [],
     notes: "",
     colors: [],

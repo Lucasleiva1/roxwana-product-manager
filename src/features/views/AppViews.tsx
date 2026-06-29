@@ -49,6 +49,7 @@ import {
   listProducts,
   openProductPackageFolder,
   restartApp,
+  saveProduct,
   searchProducts,
 } from "../../services/desktopService";
 import {
@@ -71,6 +72,13 @@ import {
   checkOllamaStatus,
   RECOMMENDED_OLLAMA_MODELS,
 } from "../../services/ollamaService";
+import {
+  checkForUpdates,
+  downloadAndInstallUpdate,
+  getInstalledVersion,
+  type UpdateCheckResult,
+  type UpdateInstallStatus,
+} from "../../services/updateService";
 
 function formatPrice(value: number) {
   return new Intl.NumberFormat("es-AR", {
@@ -121,6 +129,38 @@ function imageFilename(product: ProductDraft, image?: ProductImage) {
   return image?.finalFilename || image?.originalName || `${product.modelCode || product.name || "portada"}.webp`;
 }
 
+const PUBLICATION_CHANNELS = [
+  { id: "whatsapp", label: "WhatsApp" },
+  { id: "web", label: "Web" },
+] as const;
+
+function publicationStatus(product: ProductDraft) {
+  return {
+    whatsapp: Boolean(product.publication?.whatsapp),
+    web: Boolean(product.publication?.web),
+  };
+}
+
+function PublicationBadges({ product }: { product: ProductDraft }) {
+  const publication = publicationStatus(product);
+  return (
+    <div className="publication-badges" aria-label="Estado de publicacion">
+      {PUBLICATION_CHANNELS.map((channel) => {
+        const active = publication[channel.id];
+        return (
+          <span
+            key={channel.id}
+            className={`publication-badge ${active ? "publication-badge--active" : ""}`}
+            title={active ? `Publicado en ${channel.label}` : `No publicado en ${channel.label}`}
+          >
+            {channel.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function ProductBarcodePreview({ variant }: { variant?: ProductVariant }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -167,18 +207,23 @@ function ProductDetailModal({
   onClose,
   onEdit,
   onOpenFolder,
+  onProductUpdated,
 }: {
   product: ProductDraft;
   onClose: () => void;
   onEdit: (product: ProductDraft) => void;
   onOpenFolder?: (product: ProductDraft) => void | Promise<void>;
+  onProductUpdated?: (product: ProductDraft) => void | Promise<void>;
 }) {
   const [selectedVariantId, setSelectedVariantId] = useState(product.variants[0]?.id || "");
   const [copied, setCopied] = useState("");
+  const [publicationBusy, setPublicationBusy] = useState<"whatsapp" | "web" | "">("");
+  const [publicationMessage, setPublicationMessage] = useState("");
   const selectedVariant =
     product.variants.find((variant) => variant.id === selectedVariantId) || product.variants[0];
   const cover = coverImage(product);
   const stockSummary = formatStockSummary(product);
+  const publication = publicationStatus(product);
 
   useEffect(() => {
     setSelectedVariantId(product.variants[0]?.id || "");
@@ -191,6 +236,29 @@ function ProductDetailModal({
     window.setTimeout(() => setCopied((current) => (current === label ? "" : current)), 1600);
   };
 
+  const togglePublication = async (channel: "whatsapp" | "web", checked: boolean) => {
+    if (!onProductUpdated || publicationBusy) return;
+    const updated: ProductDraft = {
+      ...product,
+      publication: {
+        ...publication,
+        [channel]: checked,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+    setPublicationBusy(channel);
+    setPublicationMessage("");
+    try {
+      await onProductUpdated(updated);
+      setPublicationMessage(`${channel === "whatsapp" ? "WhatsApp" : "Web"} actualizado`);
+      window.setTimeout(() => setPublicationMessage(""), 1800);
+    } catch (error) {
+      setPublicationMessage(error instanceof Error ? error.message : "No pude guardar el estado.");
+    } finally {
+      setPublicationBusy("");
+    }
+  };
+
   return (
     <div className="product-viewer-backdrop" onMouseDown={onClose}>
       <section className="product-viewer" onMouseDown={(event) => event.stopPropagation()}>
@@ -199,6 +267,7 @@ function ProductDetailModal({
             <span className="eyebrow">Ficha completa</span>
             <h2>{product.name || product.modelCode || "Producto sin nombre"}</h2>
             <p>{product.shortDescription || product.longDescription || "Sin descripcion cargada."}</p>
+            <PublicationBadges product={product} />
           </div>
           <div className="product-viewer__header-actions">
             {copied && <StatusDot status="success">{copied} copiado</StatusDot>}
@@ -313,6 +382,35 @@ function ProductDetailModal({
                   <span key={tag}>{tag}</span>
                 ))}
               </div>
+            </section>
+
+            <section className="product-viewer__section">
+              <h3>Publicacion</h3>
+              <div className="product-viewer__publication">
+                {PUBLICATION_CHANNELS.map((channel) => {
+                  const active = publication[channel.id];
+                  return (
+                    <button
+                      type="button"
+                      key={channel.id}
+                      className={`publication-toggle ${active ? "publication-toggle--active" : ""}`}
+                      onClick={() => void togglePublication(channel.id, !active)}
+                      disabled={Boolean(publicationBusy)}
+                    >
+                      <span>{channel.label}</span>
+                      <strong>{active ? "Publicado" : "No publicado"}</strong>
+                      <small>
+                        {publicationBusy === channel.id
+                          ? "Guardando..."
+                          : active
+                            ? "Iluminado en la tarjeta"
+                            : "Apagado en la tarjeta"}
+                      </small>
+                    </button>
+                  );
+                })}
+              </div>
+              {publicationMessage && <p className="product-viewer__publication-message">{publicationMessage}</p>}
             </section>
 
             <section className="product-viewer__section product-viewer__barcode-section">
@@ -925,6 +1023,14 @@ export function ProductsView({
     }
   };
 
+  const updateProduct = async (product: ProductDraft) => {
+    await saveProduct(product);
+    setSelectedProduct(product);
+    await onRefresh();
+    setProductNotice(`Publicacion actualizada: ${product.modelCode || product.name}`);
+    window.setTimeout(() => setProductNotice(""), 2200);
+  };
+
   const copyProductValue = (label: string, value: string) => {
     const text = value.trim();
     if (!text) return;
@@ -1081,6 +1187,7 @@ export function ProductsView({
             setSelectedProduct(null);
             onOpen(product);
           }}
+          onProductUpdated={updateProduct}
         />
       )}
       {deleteTarget && (
@@ -1148,6 +1255,7 @@ export function ProductsView({
                   {inlineCopyButton("Nombre", product.name)}
                 </div>
                 {productCode(product)}
+                <PublicationBadges product={product} />
                 {copyDescriptionButton(product)}
                 <div className="product-card__meta">
                   <span>{product.variants.length} variantes</span>
@@ -1178,7 +1286,13 @@ export function ProductsView({
   );
 }
 
-export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void }) {
+export function SearchView({
+  onOpen,
+  onProductsChanged,
+}: {
+  onOpen: (product: ProductDraft) => void;
+  onProductsChanged?: () => void | Promise<void>;
+}) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ProductDraft[]>([]);
   const [busy, setBusy] = useState(false);
@@ -1235,6 +1349,16 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
     onOpen(product);
   };
 
+  const updateProduct = async (product: ProductDraft) => {
+    await saveProduct(product);
+    setSelectedProduct(product);
+    setResults((current) => current.map((item) => (item.id === product.id ? product : item)));
+    setPinnedProducts((current) =>
+      current.map((item) => (item.product.id === product.id ? { ...item, product } : item)),
+    );
+    await onProductsChanged?.();
+  };
+
   return (
     <div className="page">
       {selectedProduct && (
@@ -1245,6 +1369,7 @@ export function SearchView({ onOpen }: { onOpen: (product: ProductDraft) => void
             await openProductPackageFolder(product.modelCode);
           }}
           onEdit={editProduct}
+          onProductUpdated={updateProduct}
         />
       )}
       <div className="page-heading">
@@ -1554,6 +1679,10 @@ export function SettingsView({
   const [saved, setSaved] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [installedVersion, setInstalledVersion] = useState("");
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  const [updateInstall, setUpdateInstall] = useState<UpdateInstallStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const selectableModels = useMemo(() => {
     const names = new Set([...ollama.models, ...RECOMMENDED_OLLAMA_MODELS.map((model) => model.name)]);
     return [...names];
@@ -1593,8 +1722,34 @@ export function SettingsView({
     }
   };
 
+  const runUpdateCheck = async () => {
+    setUpdateBusy(true);
+    setUpdateInstall(null);
+    setUpdateCheck({
+      status: "unavailable",
+      message: "Buscando actualizacion...",
+      currentVersion: installedVersion,
+    });
+    const result = await checkForUpdates();
+    setUpdateCheck(result);
+    if (result.currentVersion) setInstalledVersion(result.currentVersion);
+    setUpdateBusy(false);
+  };
+
+  const installAvailableUpdate = async () => {
+    if (updateCheck?.status !== "available") return;
+    const accepted = window.confirm(
+      `Hay una nueva actualizacion disponible: ${updateCheck.version}.\n\nQueres instalarla ahora? La app se va a reiniciar al terminar.`,
+    );
+    if (!accepted) return;
+    setUpdateBusy(true);
+    await downloadAndInstallUpdate(updateCheck.update, setUpdateInstall);
+    setUpdateBusy(false);
+  };
+
   useEffect(() => {
     void testOllama();
+    void getInstalledVersion().then(setInstalledVersion).catch(() => setInstalledVersion(""));
   }, []);
 
   return (
@@ -1668,6 +1823,44 @@ export function SettingsView({
               <p className="settings-note">
                 Flujo por turnos: en una PC usas Subir a Drive, esperas la sincronizacion de Google Drive,
                 y en la otra PC usas Bajar de Drive.
+              </p>
+            </div>
+          </Panel>
+          <Panel title="Actualizaciones" eyebrow="GitHub Releases" icon={<CloudDownload size={18} />}>
+            <div className="settings-fields">
+              <div className="settings-toggle-row">
+                <span>
+                  <strong>Version instalada</strong>
+                  <small>{installedVersion || "Sin detectar"}</small>
+                </span>
+                <StatusDot status={appMode === "desktop" ? "success" : "warning"}>
+                  {appMode === "desktop" ? "Escritorio" : "Solo escritorio"}
+                </StatusDot>
+              </div>
+              <div className="settings-actions">
+                <Button onClick={() => void runUpdateCheck()} loading={updateBusy}>
+                  <RefreshCw size={15} /> Buscar actualizacion
+                </Button>
+                {updateCheck?.status === "available" && (
+                  <Button variant="primary" onClick={() => void installAvailableUpdate()} loading={updateBusy}>
+                    <CloudDownload size={15} /> Instalar version {updateCheck.version}
+                  </Button>
+                )}
+              </div>
+              {updateCheck && (
+                <p className="settings-note">
+                  {updateCheck.message}
+                  {updateCheck.status === "available" && updateCheck.notes ? ` ${updateCheck.notes}` : ""}
+                </p>
+              )}
+              {updateInstall && (
+                <p className="settings-note">
+                  {updateInstall.message}
+                  {typeof updateInstall.progress === "number" ? ` ${updateInstall.progress}%` : ""}
+                </p>
+              )}
+              <p className="settings-note">
+                ROXWANA avisa antes de instalar. Si aceptas, Windows instala la build completa y la app se reinicia.
               </p>
             </div>
           </Panel>

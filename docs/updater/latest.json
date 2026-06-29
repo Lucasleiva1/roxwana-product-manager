@@ -1,0 +1,11 @@
+{
+  "version": "0.2.4",
+  "notes": "Corrige portadas de productos restaurados, estados WhatsApp/Web y actualizacion de escritorio.",
+  "pub_date": "2026-06-29T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUZHVDc2dYUlNUaFU5cnNpcnNtRzArWTk1QzVQRlNzeXQzbzNod3A2Z25Zckl3WVIxU09aSHZ3R0RyMVFpUXpBTHJGcG1GeEVGQjFBRG5PZmJpWmx3a2ZGakI0dWRIVWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyNzYxODcwCWZpbGU6Uk9YV0FOQSBQcm9kdWN0IE1hbmFnZXJfMC4yLjRfeDY0LXNldHVwLmV4ZQpDeG5MSzNSMDErYmNnVkIzL1NjVnFObDNEK1hQamxBeVN0L1JwVnpoa3dCS2NPQWNTc1lGOG1HT1VidjA2WnBGeHFtZHl1VHMvdytRTm94MTJaUzlCdz09Cg==",
+      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.4/ROXWANA%20Product%20Manager_0.2.4_x64-setup.exe"
+    }
+  }
+}

@@ -11,4 +11,8 @@ data/*.db-*
 product-files/*
 !product-files/.gitkeep
 *.log
+*.key
+*.key.pub
+*.sig
+.tauri/
 .DS_Store

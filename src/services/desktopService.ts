@@ -62,13 +62,24 @@ function writeLocalProducts(products: ProductDraft[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
 }
 
-function hydrateDesktopProduct(product: ProductDraft): ProductDraft {
-  if (!isTauri()) return product;
+function normalizeProductDraft(product: ProductDraft): ProductDraft {
   return {
     ...product,
-    images: product.images.map((image) => ({
+    publication: {
+      whatsapp: Boolean(product.publication?.whatsapp),
+      web: Boolean(product.publication?.web),
+    },
+  };
+}
+
+function hydrateDesktopProduct(product: ProductDraft): ProductDraft {
+  const normalized = normalizeProductDraft(product);
+  if (!isTauri()) return normalized;
+  return {
+    ...normalized,
+    images: normalized.images.map((image) => ({
       ...image,
-      previewUrl: image.finalPath ? convertFileSrc(image.finalPath) : image.previewUrl,
+      previewUrl: image.finalPath ? convertFileSrc(image.finalPath) : undefined,
     })),
   };
 }
@@ -101,20 +112,21 @@ export async function restartApp() {
 }
 
 export async function saveProduct(product: ProductDraft) {
+  const normalized = normalizeProductDraft(product);
   if (isTauri()) {
-    return invoke<{ folderPath: string }>("save_product", { product: packageProduct(product) });
+    return invoke<{ folderPath: string }>("save_product", { product: packageProduct(normalized) });
   }
   const products = readLocalProducts();
-  const index = products.findIndex((item) => item.id === product.id);
-  if (index >= 0) products[index] = product;
-  else products.unshift(product);
+  const index = products.findIndex((item) => item.id === normalized.id);
+  if (index >= 0) products[index] = normalized;
+  else products.unshift(normalized);
   writeLocalProducts(products);
-  return { folderPath: `product-files/${product.modelCode}` };
+  return { folderPath: `product-files/${normalized.modelCode}` };
 }
 
 export async function listProducts(): Promise<ProductDraft[]> {
   if (isTauri()) return hydrateDesktopProducts(await invoke<ProductDraft[]>("list_products"));
-  return readLocalProducts();
+  return readLocalProducts().map(normalizeProductDraft);
 }
 
 export interface DeleteProductResult {
@@ -211,9 +223,10 @@ function stripTransientImageData(image: ProductImage): ProductImage {
 }
 
 function packageProduct(product: ProductDraft): ProductDraft {
+  const normalized = normalizeProductDraft(product);
   return {
-    ...product,
-    images: product.images.map(stripTransientImageData),
+    ...normalized,
+    images: normalized.images.map(stripTransientImageData),
   };
 }
 
