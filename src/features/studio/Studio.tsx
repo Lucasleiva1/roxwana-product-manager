@@ -951,12 +951,18 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       const productToSave = useProductStore.getState().draft;
       const productSheet = makeProductSheet(productToSave);
       const productWebInfo = makeWebProductInfo(productToSave);
+      let whatsappImage: ProductPackageWhatsAppImage | undefined;
+      try {
+        whatsappImage = await buildWhatsappImage(productToSave);
+      } catch (error) {
+        console.warn("No pude preparar la imagen de WhatsApp.", error);
+      }
       const packageResult = await saveProductPackage({
         product: productToSave,
         productSheet,
         webInfo: productWebInfo,
         images: await buildPackageImages(productToSave),
-        whatsappImage: await buildWhatsappImage(productToSave),
+        whatsappImage,
         barcodes: await buildPackageBarcodes(productToSave),
         printFiles: await buildPackagePrintFiles(),
       });

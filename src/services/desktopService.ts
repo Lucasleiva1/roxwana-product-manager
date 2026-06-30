@@ -3,11 +3,23 @@ import type { AppSettings, ProductDraft, ProductImage } from "../types/product";
 
 declare global {
   interface Window {
+    __TAURI__?: unknown;
     __TAURI_INTERNALS__?: unknown;
   }
 }
 
-export const isTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
+let desktopInvokeAvailable = false;
+
+export const isTauri = () => {
+  if (typeof window === "undefined") return false;
+  return Boolean(
+    desktopInvokeAvailable ||
+      window.__TAURI_INTERNALS__ ||
+      window.__TAURI__ ||
+      window.location.protocol === "tauri:" ||
+      window.location.hostname === "tauri.localhost",
+  );
+};
 
 const STORAGE_KEY = "roxwana-products-v1";
 const DEV_PRODUCT_PACKAGE_ENDPOINT = "/api/product-package";
@@ -62,6 +74,20 @@ function writeLocalProducts(products: ProductDraft[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
 }
 
+async function invokeSaveProduct(product: ProductDraft) {
+  const result = await invoke<{ folderPath: string }>("save_product", { product: packageProduct(product) });
+  desktopInvokeAvailable = true;
+  return result;
+}
+
+async function invokeSaveProductPackage(payload: ProductPackagePayload) {
+  const result = await invoke<{ folderPath: string }>("save_product_package", {
+    payload: { ...payload, product: packageProduct(payload.product) },
+  });
+  desktopInvokeAvailable = true;
+  return result;
+}
+
 function normalizeProductDraft(product: ProductDraft): ProductDraft {
   return {
     ...product,
@@ -99,8 +125,14 @@ function errorMessage(error: unknown, fallback: string) {
 }
 
 export async function initializeDesktop() {
-  if (!isTauri()) return { mode: "browser" as const, databasePath: "localStorage" };
-  return invoke<{ databasePath: string }>("initialize_database");
+  if (isTauri()) return invoke<{ databasePath: string }>("initialize_database");
+  try {
+    const result = await invoke<{ databasePath: string }>("initialize_database");
+    desktopInvokeAvailable = true;
+    return result;
+  } catch {
+    return { mode: "browser" as const, databasePath: "localStorage" };
+  }
 }
 
 export async function restartApp() {
@@ -114,7 +146,7 @@ export async function restartApp() {
 export async function saveProduct(product: ProductDraft) {
   const normalized = normalizeProductDraft(product);
   if (isTauri()) {
-    return invoke<{ folderPath: string }>("save_product", { product: packageProduct(normalized) });
+    return invokeSaveProduct(normalized);
   }
   const products = readLocalProducts();
   const index = products.findIndex((item) => item.id === normalized.id);
@@ -231,11 +263,22 @@ function packageProduct(product: ProductDraft): ProductDraft {
 }
 
 async function postDevProductPackage(payload: ProductPackagePayload) {
-  const response = await fetch(DEV_PRODUCT_PACKAGE_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, product: packageProduct(payload.product) }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(DEV_PRODUCT_PACKAGE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...payload, product: packageProduct(payload.product) }),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "Failed to fetch" || error instanceof TypeError) {
+      throw new Error(
+        "El servidor local de Vite no esta respondiendo. Reinicia la app local y volve a guardar.",
+      );
+    }
+    throw error;
+  }
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || "No pude crear el paquete del producto.");
@@ -245,13 +288,16 @@ async function postDevProductPackage(payload: ProductPackagePayload) {
 
 export async function saveProductPackage(payload: ProductPackagePayload) {
   if (isTauri()) {
-    return invoke<{ folderPath: string }>("save_product_package", {
-      payload: { ...payload, product: packageProduct(payload.product) },
-    });
+    return invokeSaveProductPackage(payload);
   }
   try {
     return await postDevProductPackage(payload);
   } catch (devError) {
+    try {
+      return await invokeSaveProductPackage(payload);
+    } catch {
+      // Keep the original browser/dev-server error, which is clearer outside the desktop app.
+    }
     throw devError;
   }
 }

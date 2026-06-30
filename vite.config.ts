@@ -662,6 +662,9 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     host: "0.0.0.0",
+    watch: {
+      ignored: ["**/src-tauri/target/**"],
+    },
     proxy: {
       "/ollama": {
         target: "http://127.0.0.1:11434",

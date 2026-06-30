@@ -41,8 +41,7 @@ export const RECOMMENDED_OLLAMA_MODELS = [
 
 function resolveOllamaEndpoint(endpoint: string) {
   if (typeof window === "undefined") return endpoint.replace(/\/$/, "");
-  const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
-  return isTauri ? endpoint.replace(/\/$/, "") : "/ollama";
+  return isTauri() ? endpoint.replace(/\/$/, "") : "/ollama";
 }
 
 function parseRequestBody(body: RequestInit["body"] | undefined) {
