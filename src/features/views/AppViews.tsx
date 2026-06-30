@@ -74,7 +74,6 @@ import {
 } from "../../services/ollamaService";
 import {
   checkForUpdates,
-  downloadAndInstallUpdate,
   getInstalledVersion,
   type UpdateCheckResult,
   type UpdateInstallStatus,
@@ -134,11 +133,56 @@ const PUBLICATION_CHANNELS = [
   { id: "web", label: "Web" },
 ] as const;
 
+type PublicationFilter = "all" | "missingWeb" | "missingWhatsapp" | "missingBoth" | "missingAny";
+
+const PUBLICATION_FILTERS: Array<{ id: PublicationFilter; label: string }> = [
+  { id: "all", label: "Todos" },
+  { id: "missingWeb", label: "Falta Web" },
+  { id: "missingWhatsapp", label: "Falta WhatsApp" },
+  { id: "missingBoth", label: "Falta ambos" },
+  { id: "missingAny", label: "Falta alguno" },
+];
+
 function publicationStatus(product: ProductDraft) {
   return {
     whatsapp: Boolean(product.publication?.whatsapp),
     web: Boolean(product.publication?.web),
   };
+}
+
+function matchesPublicationFilter(product: ProductDraft, filter: PublicationFilter) {
+  const publication = publicationStatus(product);
+  if (filter === "missingWeb") return !publication.web;
+  if (filter === "missingWhatsapp") return !publication.whatsapp;
+  if (filter === "missingBoth") return !publication.web && !publication.whatsapp;
+  if (filter === "missingAny") return !publication.web || !publication.whatsapp;
+  return true;
+}
+
+function PublicationFilterTabs({
+  value,
+  onChange,
+  products,
+}: {
+  value: PublicationFilter;
+  onChange: (value: PublicationFilter) => void;
+  products: ProductDraft[];
+}) {
+  return (
+    <div className="publication-filter-tabs" aria-label="Filtros de publicacion">
+      {PUBLICATION_FILTERS.map((filter) => (
+        <button
+          type="button"
+          key={filter.id}
+          className={value === filter.id ? "active" : ""}
+          onClick={() => onChange(filter.id)}
+        >
+          <span>{filter.label}</span>
+          <strong>{products.filter((product) => matchesPublicationFilter(product, filter.id)).length}</strong>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function PublicationBadges({ product }: { product: ProductDraft }) {
@@ -556,7 +600,7 @@ function BackupDriveControl({
   onRestored?: () => void | Promise<void>;
 }) {
   const [status, setStatus] = useState<BackupStatus | null>(null);
-  const [busy, setBusy] = useState<"status" | "backup" | "restore" | "sync" | "">("status");
+  const [busy, setBusy] = useState<"status" | "sync" | "">("status");
   const [message, setMessage] = useState("");
 
   const loadStatus = async () => {
@@ -575,40 +619,6 @@ function BackupDriveControl({
   useEffect(() => {
     void loadStatus();
   }, [backupRoot]);
-
-  const saveNow = async () => {
-    setBusy("backup");
-    try {
-      const result = await runBackup(backupRoot, "manual");
-      setStatus(result.status);
-      setMessage("Esta PC subio sus datos a Drive. Espera a que Google Drive termine de sincronizar.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "No pude guardar el backup.");
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const restoreNow = async () => {
-    if (
-      !window.confirm(
-        "Bajar de Drive reemplaza la base local y las carpetas de productos de esta PC con la copia de Google Drive. Continuar?",
-      )
-    ) {
-      return;
-    }
-    setBusy("restore");
-    try {
-      const result = await restoreBackup(backupRoot);
-      setStatus(result.status);
-      setMessage("Esta PC bajo la copia de Drive y acomodo la base y las carpetas locales.");
-      await onRestored?.();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "No pude restaurar el backup.");
-    } finally {
-      setBusy("");
-    }
-  };
 
   const updateNow = async () => {
     setBusy("sync");
@@ -633,15 +643,6 @@ function BackupDriveControl({
       const driveTime = new Date(nextStatus.lastBackupAt || "").getTime() || 0;
       const localTime = latestProductChange(products);
       if (driveTime > localTime) {
-        if (
-          products.length > 0 &&
-          !window.confirm(
-            "Drive tiene una copia mas nueva. Actualizar va a bajar Drive y reemplazar esta PC. Continuar?",
-          )
-        ) {
-          setMessage("Actualizacion cancelada. No se cambio nada.");
-          return;
-        }
         const result = await restoreBackup(backupRoot);
         setStatus(result.status);
         setMessage("Drive tenia cambios mas nuevos. Esta PC quedo actualizada.");
@@ -681,7 +682,7 @@ function BackupDriveControl({
                 : "Drive no detectado"}
           </StatusDot>
           <strong>{formatBackupDate(status?.lastBackupAt)}</strong>
-          <small>{message || "Subi desde esta PC o baja la ultima copia que llego por Google Drive."}</small>
+          <small>{message || "Actualizar decide automaticamente si esta PC sube cambios o baja la copia nueva."}</small>
         </div>
       </div>
 
@@ -713,17 +714,7 @@ function BackupDriveControl({
 
       <div className="backup-drive__actions">
         <Button onClick={updateNow} loading={busy === "sync"} disabled={busy !== ""} variant="primary">
-          <RefreshCw size={15} /> Actualizar
-        </Button>
-        <Button onClick={saveNow} loading={busy === "backup"} disabled={busy !== ""}>
-          <CloudUpload size={15} /> Subir a Drive
-        </Button>
-        <Button
-          onClick={restoreNow}
-          loading={busy === "restore"}
-          disabled={busy !== "" || !status?.backupExists}
-        >
-          <CloudDownload size={15} /> Bajar de Drive
+          <RefreshCw size={15} /> Actualizar ahora
         </Button>
         <Button onClick={loadStatus} loading={busy === "status"} disabled={busy !== ""} size="sm">
           <RefreshCw size={14} /> Revisar
@@ -904,28 +895,28 @@ export function BackupView({
         <div>
           <span className="eyebrow">Google Drive</span>
           <h1>Backup</h1>
-          <p>Actualizar, subir o bajar la copia de trabajo entre esta PC, Drive y otra computadora.</p>
+          <p>Sincronizacion automatica entre esta PC, Drive y otra computadora.</p>
         </div>
       </div>
 
       <div className="backup-page-grid">
-        <Panel title="Sincronizacion principal" eyebrow="Subir / bajar" icon={<CloudCog size={18} />}>
+        <Panel title="Sincronizacion principal" eyebrow="Automatico" icon={<CloudCog size={18} />}>
           <BackupDriveControl backupRoot={settings.backupRoot} onRestored={onProductsChanged} />
         </Panel>
 
         <Panel title="Como usarlo" eyebrow="Por turnos" icon={<CloudUpload size={18} />}>
           <div className="backup-guide">
             <div>
-              <strong>1. Boton recomendado</strong>
-              <span>Usa Actualizar. Si esta PC cambio, sube a Drive; si Drive esta mas nuevo, baja a esta PC.</span>
+              <strong>1. Al abrir</strong>
+              <span>La app revisa Drive y actualiza esta PC o sube cambios locales, segun corresponda.</span>
             </div>
             <div>
-              <strong>2. Controles manuales</strong>
-              <span>Usa Subir a Drive o Bajar de Drive cuando quieras forzar un sentido puntual.</span>
+              <strong>2. Al guardar o eliminar</strong>
+              <span>El cambio local dispara un backup automatico para que llegue a la otra computadora.</span>
             </div>
             <div>
-              <strong>3. Espera Google Drive</strong>
-              <span>Despues de subir, espera que Drive termine de sincronizar antes de bajar en otra PC.</span>
+              <strong>3. Actualizar ahora</strong>
+              <span>Usalo si queres forzar una revision inmediata sin elegir subir o bajar.</span>
             </div>
           </div>
         </Panel>
@@ -951,6 +942,7 @@ export function ProductsView({
   onRefresh: () => void | Promise<void>;
 }) {
   const [filter, setFilter] = useState("");
+  const [publicationFilter, setPublicationFilter] = useState<PublicationFilter>("all");
   const [viewMode, setViewMode] = useState<"cards" | "list" | "detail">("cards");
   const [copiedMessage, setCopiedMessage] = useState("");
   const [productNotice, setProductNotice] = useState("");
@@ -960,9 +952,12 @@ export function ProductsView({
   const [deleteTarget, setDeleteTarget] = useState<ProductDraft | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const dragImageFiles = useRef(new Map<string, File>());
-  const visible = products.filter((product) =>
-    `${product.name} ${product.modelCode} ${product.status}`.toLowerCase().includes(filter.toLowerCase()),
-  );
+  const visible = products.filter((product) => {
+    const matchesText = `${product.name} ${product.modelCode} ${product.status}`
+      .toLowerCase()
+      .includes(filter.toLowerCase());
+    return matchesText && matchesPublicationFilter(product, publicationFilter);
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -1002,13 +997,20 @@ export function ProductsView({
       );
       window.setTimeout(() => setProductNotice(""), result.folderDeleted ? 2200 : 6500);
     } catch (error) {
-      setDeleteError(
+      const message =
         error instanceof Error
           ? error.message
           : typeof error === "string"
             ? error
-            : "No pude eliminar el producto.",
-      );
+            : "No pude eliminar el producto.";
+      if (message.startsWith("El cambio se guardo localmente")) {
+        await onRefresh();
+        setDeleteTarget(null);
+        setProductNotice(message);
+        window.setTimeout(() => setProductNotice(""), 6500);
+      } else {
+        setDeleteError(message);
+      }
     } finally {
       setDeletingId(null);
     }
@@ -1223,6 +1225,7 @@ export function ProductsView({
             placeholder="Filtrar por nombre, modelo o estado..."
           />
         </div>
+        <PublicationFilterTabs value={publicationFilter} onChange={setPublicationFilter} products={products} />
         <div className="view-switch" aria-label="Vista de productos">
           {[
             ["cards", LayoutGrid, "Tarjetas"],
@@ -1298,19 +1301,20 @@ export function SearchView({
   const [busy, setBusy] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductDraft | null>(null);
   const [viewMode, setViewMode] = useState<SearchViewMode>("list");
+  const [publicationFilter, setPublicationFilter] = useState<PublicationFilter>("all");
   const [pinnedProducts, setPinnedProducts] = useState<PinnedSearchProduct[]>(readPinnedSearchProducts);
   const searchRequest = useRef(0);
 
   const runSearch = async () => {
     const requestId = ++searchRequest.current;
     const normalized = query.trim();
-    if (!normalized) {
+    if (!normalized && publicationFilter === "all") {
       setResults([]);
       setBusy(false);
       return;
     }
     setBusy(true);
-    const next = await searchProducts(normalized);
+    const next = normalized ? await searchProducts(normalized) : await listProducts();
     if (requestId === searchRequest.current) {
       setResults(next);
       setBusy(false);
@@ -1318,7 +1322,7 @@ export function SearchView({
   };
 
   useEffect(() => {
-    if (!query.trim()) {
+    if (!query.trim() && publicationFilter === "all") {
       searchRequest.current += 1;
       setResults([]);
       setBusy(false);
@@ -1326,7 +1330,7 @@ export function SearchView({
     }
     const timer = window.setTimeout(() => void runSearch(), 220);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [query, publicationFilter]);
 
   useEffect(() => {
     sessionStorage.setItem(SEARCH_PINNED_STORAGE_KEY, JSON.stringify(pinnedProducts));
@@ -1334,7 +1338,10 @@ export function SearchView({
 
   const isPinned = (product: ProductDraft) => pinnedProducts.some((pinned) => pinned.product.id === product.id);
 
-  const visibleResults = results.filter((product) => !isPinned(product));
+  const visibleResults = results
+    .filter((product) => matchesPublicationFilter(product, publicationFilter))
+    .filter((product) => !isPinned(product));
+  const hasActiveSearch = Boolean(query.trim()) || publicationFilter !== "all";
 
   const togglePinned = (product: ProductDraft) => {
     setPinnedProducts((current) =>
@@ -1387,11 +1394,12 @@ export function SearchView({
           placeholder="Ejemplo: RXW-REM-SRK004-NEG-M"
           autoFocus
         />
-        <Button variant="primary" loading={busy} disabled={!query.trim()} onClick={runSearch}>
+        <Button variant="primary" loading={busy} disabled={!query.trim() && publicationFilter === "all"} onClick={runSearch}>
           Buscar
         </Button>
       </div>
       <div className="page-toolbar search-view-toolbar">
+        <PublicationFilterTabs value={publicationFilter} onChange={setPublicationFilter} products={results} />
         <div className="view-switch" aria-label="Vista del buscador">
           {[
             ["cards", LayoutGrid, "Tarjetas"],
@@ -1431,6 +1439,7 @@ export function SearchView({
                 <div>
                   <h3>{product.name}</h3>
                   <code>{product.modelCode}</code>
+                  <PublicationBadges product={product} />
                   <p>{product.shortDescription || "Sin descripción todavía."}</p>
                   <div>
                     {product.colors.map((color) => (
@@ -1465,11 +1474,13 @@ export function SearchView({
         ) : (
           <EmptyState
             icon={<Search />}
-            title={query ? "Sin coincidencias" : "Empezá a escribir"}
+            title={hasActiveSearch ? "Sin coincidencias" : "Empezá a escribir"}
             description={
               results.length
                 ? "Los resultados de esta busqueda ya estan anclados abajo."
-                : "El buscador consulta productos y variantes guardados localmente."
+                : publicationFilter === "all"
+                  ? "El buscador consulta productos y variantes guardados localmente."
+                  : "No hay productos pendientes para ese filtro de publicacion."
             }
           />
         )}
@@ -1496,6 +1507,7 @@ export function SearchView({
                 <div>
                   <h3>{product.name || product.modelCode}</h3>
                   <code>{product.modelCode}</code>
+                  <PublicationBadges product={product} />
                   {pinnedViewMode !== "cards" && (
                     <p>{product.shortDescription || product.longDescription || "Sin descripcion todavia."}</p>
                   )}
@@ -1666,9 +1678,11 @@ export function HistoryView({
 export function SettingsView({
   appMode,
   onProductsChanged,
+  onInstallUpdate,
 }: {
   appMode: "desktop" | "browser";
   onProductsChanged: () => void | Promise<void>;
+  onInstallUpdate: (update: Extract<UpdateCheckResult, { status: "available" }>) => Promise<void>;
 }) {
   const { settings, setSettings } = useProductStore();
   const [form, setForm] = useState<AppSettings>(settings);
@@ -1738,12 +1752,13 @@ export function SettingsView({
 
   const installAvailableUpdate = async () => {
     if (updateCheck?.status !== "available") return;
-    const accepted = window.confirm(
-      `Hay una nueva actualizacion disponible: ${updateCheck.version}.\n\nQueres instalarla ahora? La app se va a reiniciar al terminar.`,
-    );
-    if (!accepted) return;
     setUpdateBusy(true);
-    await downloadAndInstallUpdate(updateCheck.update, setUpdateInstall);
+    setUpdateInstall({
+      status: "downloading",
+      message: "Abriendo instalador de actualizacion...",
+      progress: 0,
+    });
+    await onInstallUpdate(updateCheck);
     setUpdateBusy(false);
   };
 
@@ -1791,27 +1806,13 @@ export function SettingsView({
               <div className="settings-toggle-row">
                 <span>
                   <strong>Backup automatico</strong>
-                  <small>Solo sube si esta PC tiene cambios mas nuevos que el backup de Drive.</small>
+                  <small>Revisa al abrir, sube al guardar o eliminar y hace un ultimo backup al cerrar.</small>
                 </span>
                 <Toggle
                   checked={form.backupEnabled}
                   onChange={(checked) => setForm((current) => ({ ...current, backupEnabled: checked }))}
                 />
               </div>
-              <label>
-                <span>Frecuencia automatica</span>
-                <select
-                  value={form.backupFrequencyDays}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, backupFrequencyDays: Number(event.target.value) }))
-                  }
-                >
-                  <option value={3}>Cada 3 dias</option>
-                  <option value={5}>Cada 5 dias</option>
-                  <option value={7}>Una vez por semana</option>
-                  <option value={15}>Cada 15 dias</option>
-                </select>
-              </label>
               <label>
                 <span>Carpeta de backup opcional</span>
                 <input
@@ -1821,8 +1822,8 @@ export function SettingsView({
                 />
               </label>
               <p className="settings-note">
-                Flujo por turnos: en una PC usas Subir a Drive, esperas la sincronizacion de Google Drive,
-                y en la otra PC usas Bajar de Drive.
+                Flujo por turnos: trabaja en una PC por vez. La app sincroniza automaticamente con Drive,
+                pero Google Drive igual necesita terminar de subir o bajar sus archivos.
               </p>
             </div>
           </Panel>

@@ -10,7 +10,7 @@ use std::{
     process::Command,
     time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WindowEvent};
 
 const MIGRATION: &str = include_str!("../migrations/001_initial.sql");
 const BACKUP_FOLDER_NAME: &str = "ROXWANA Product Manager Backup";
@@ -1194,7 +1194,7 @@ fn run_required_save_backup(app: &AppHandle, reason: &str) -> Result<(), String>
         .map(|_| ())
         .map_err(|error| {
             format!(
-                "El producto se guardo localmente, pero no pude subir el backup automatico a Drive: {error}"
+                "El cambio se guardo localmente, pero no pude subir el backup automatico a Drive: {error}"
             )
         })
 }
@@ -1449,6 +1449,7 @@ fn delete_product(app: AppHandle, product_id: String) -> Result<(), String> {
         )
         .optional()
         .map_err(|error| error.to_string())?;
+    let deleted_model_code = model_code.clone();
     if let Some(model_code) = model_code {
         let root = product_root(&app)?;
         let folder = product_folder(&app, &model_code)?;
@@ -1484,9 +1485,13 @@ fn delete_product(app: AppHandle, product_id: String) -> Result<(), String> {
         )
         .map_err(|error| error.to_string())?;
     transaction
-        .execute("DELETE FROM products WHERE id = ?1", params![product_id])
+        .execute("DELETE FROM products WHERE id = ?1", params![product_id.clone()])
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())?;
+    let backup_reason = deleted_model_code
+        .as_deref()
+        .unwrap_or(product_id.as_str());
+    run_required_save_backup(&app, &format!("auto-delete-product-{backup_reason}"))?;
     Ok(())
 }
 
@@ -1931,6 +1936,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .on_window_event(|window, event| {
+            if matches!(event, WindowEvent::CloseRequested { .. }) {
+                let app = window.app_handle().clone();
+                let _ = run_backup_operation(&app, None, Some("auto-exit".to_string()));
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             initialize_database,
             backup_status,

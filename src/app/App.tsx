@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Archive,
   Boxes,
@@ -22,9 +22,9 @@ import { Button } from "../components/ui";
 import {
   formatBackupDate,
   getBackupStatus,
+  latestProductChange,
   restoreBackup,
   runBackup,
-  shouldRunAutomaticBackup,
   type BackupStatus,
 } from "../services/backupService";
 import {
@@ -68,6 +68,78 @@ const navigation: Array<{
   { id: "settings", label: "Ajustes", icon: Settings },
 ];
 
+type AvailableUpdate = Extract<UpdateCheckResult, { status: "available" }>;
+
+interface LoadingScreenState {
+  active: boolean;
+  progress: number | null;
+  message: string;
+  detail: string;
+  mode: "startup" | "update";
+  error?: string;
+  version?: string;
+}
+
+function RoxwanaLoadingScreen({
+  state,
+  onClose,
+}: {
+  state: LoadingScreenState;
+  onClose?: () => void;
+}) {
+  const progress = typeof state.progress === "number" ? Math.max(0, Math.min(100, state.progress)) : null;
+  const isUpdate = state.mode === "update";
+
+  return (
+    <div className={`system-loader ${isUpdate ? "system-loader--update" : "system-loader--startup"}`}>
+      <div className="system-loader__frame">
+        <div className="system-loader__corner system-loader__corner--tl" />
+        <div className="system-loader__corner system-loader__corner--tr" />
+        <div className="system-loader__corner system-loader__corner--bl" />
+        <div className="system-loader__corner system-loader__corner--br" />
+        <div className="system-loader__side">
+          <code>SYS.01</code>
+          <span>{isUpdate ? "DESCARGANDO BUILD" : "SINCRONIZANDO"}</span>
+          <span>{isUpdate ? "VERIFICANDO FIRMA" : "BASE DE DATOS"}</span>
+          <span>{isUpdate ? "INSTALANDO" : "VERIFICANDO MODULOS"}</span>
+        </div>
+        <div className="system-loader__brand">
+          <div className="system-loader__seal">
+            <span>RXW</span>
+          </div>
+          <div>
+            <strong>ROXWANA</strong>
+            <small>INVENTARIO</small>
+          </div>
+        </div>
+        <div className="system-loader__progress">
+          <div>
+            <i style={{ width: `${progress ?? 42}%` }} />
+          </div>
+          <strong>{progress === null ? "--" : progress}%</strong>
+        </div>
+        <div className="system-loader__status">
+          <span>[</span>
+          <strong>{state.message}</strong>
+          <span>]</span>
+        </div>
+        <p>{state.detail}</p>
+        {state.error && (
+          <div className="system-loader__error">
+            <strong>No se pudo completar</strong>
+            <span>{state.error}</span>
+            {onClose && (
+              <Button size="sm" onClick={onClose}>
+                Cerrar
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [view, setView] = useState<AppView>("studio");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -81,6 +153,21 @@ function App() {
   const [startupUpdate, setStartupUpdate] = useState<UpdateCheckResult | null>(null);
   const [startupInstall, setStartupInstall] = useState<UpdateInstallStatus | null>(null);
   const [startupUpdateBusy, setStartupUpdateBusy] = useState(false);
+  const [bootScreen, setBootScreen] = useState<LoadingScreenState>({
+    active: true,
+    progress: 4,
+    message: "CARGANDO SISTEMA...",
+    detail: "Activando modulos locales",
+    mode: "startup",
+  });
+  const [updateScreen, setUpdateScreen] = useState<LoadingScreenState>({
+    active: false,
+    progress: 0,
+    message: "ACTUALIZACION",
+    detail: "Preparando instalador",
+    mode: "update",
+  });
+  const updateDismissed = useRef(false);
   const setDraft = useProductStore((state) => state.setDraft);
   const resetDraft = useProductStore((state) => state.resetDraft);
   const draft = useProductStore((state) => state.draft);
@@ -98,20 +185,51 @@ function App() {
 
   const checkStartupUpdate = async () => {
     const result = await checkForUpdates();
-    if (result.status === "available") {
+    if (result.status === "available" && !updateDismissed.current) {
       setStartupUpdate(result);
     }
   };
 
-  const installStartupUpdate = async () => {
-    if (startupUpdate?.status !== "available") return;
-    const accepted = window.confirm(
-      `Hay una nueva actualizacion disponible: ${startupUpdate.version}.\n\nQueres instalarla ahora? La app se va a reiniciar al terminar.`,
-    );
-    if (!accepted) return;
+  const installUpdate = async (updateResult: AvailableUpdate) => {
     setStartupUpdateBusy(true);
-    await downloadAndInstallUpdate(startupUpdate.update, setStartupInstall);
-    setStartupUpdateBusy(false);
+    setStartupInstall(null);
+    setUpdateScreen({
+      active: true,
+      mode: "update",
+      version: updateResult.version,
+      progress: 0,
+      message: "ACTUALIZANDO SISTEMA...",
+      detail: `Preparando version ${updateResult.version}`,
+    });
+    let failed = false;
+    await downloadAndInstallUpdate(updateResult.update, (status) => {
+      if (status.status === "error") failed = true;
+      setStartupInstall(status);
+      setUpdateScreen({
+        active: true,
+        mode: "update",
+        version: updateResult.version,
+        progress:
+          typeof status.progress === "number"
+            ? status.progress
+            : status.status === "installing"
+              ? 92
+              : status.status === "relaunching"
+                ? 100
+                : null,
+        message:
+          status.status === "downloading"
+            ? "DESCARGANDO ACTUALIZACION..."
+            : status.status === "installing"
+              ? "INSTALANDO ACTUALIZACION..."
+              : status.status === "relaunching"
+                ? "REINICIANDO SISTEMA..."
+                : "ERROR DE ACTUALIZACION",
+        detail: status.message,
+        error: status.status === "error" ? status.message : undefined,
+      });
+    });
+    if (failed) setStartupUpdateBusy(false);
   };
 
   useEffect(() => {
@@ -130,30 +248,52 @@ function App() {
         setBackupMessage("Drive no detectado");
         return;
       }
-      if (status.backupExists && currentProducts.length === 0) {
-        setBackupMessage("Restaurando backup de Drive");
+      if (!status.backupExists) {
+        if (!currentProducts.length) {
+          setBackupMessage("Drive listo, sin productos para sincronizar");
+          return;
+        }
+        setBackupMessage("Subiendo copia local a Drive");
+        const result = await runBackup(settings.backupRoot, `auto-${mode}-crear-backup`);
+        if (cancelled) return;
+        setBackupStatus(result.status);
+        setBackupMessage("Drive quedo actualizado con esta PC");
+        return;
+      }
+
+      const driveTime = new Date(status.lastBackupAt || "").getTime() || 0;
+      const localTime = latestProductChange(currentProducts);
+
+      if (currentProducts.length === 0 || driveTime > localTime) {
+        setBackupMessage("Bajando cambios nuevos de Drive");
         const result = await restoreBackup(settings.backupRoot);
         if (cancelled) return;
         setBackupStatus(result.status);
-        setBackupMessage("Backup restaurado desde Drive");
+        setBackupMessage("Esta PC quedo actualizada desde Drive");
         await loadProducts();
         return;
       }
-      if (shouldRunAutomaticBackup(status, currentProducts, settings.backupFrequencyDays)) {
-        setBackupMessage("Guardando backup en Drive");
-        const result = await runBackup(settings.backupRoot, mode === "startup" ? "auto-startup" : "auto-daily");
+
+      if (localTime > driveTime || currentProducts.length !== status.productCount) {
+        setBackupMessage("Subiendo cambios locales a Drive");
+        const result = await runBackup(settings.backupRoot, `auto-${mode}-subir-cambios`);
         if (cancelled) return;
         setBackupStatus(result.status);
-        setBackupMessage("Backup de Drive actualizado");
+        setBackupMessage("Drive quedo actualizado con los cambios locales");
         return;
       }
-      setBackupMessage(
-        status.backupExists ? `Drive listo para subir o bajar - ${formatBackupDate(status.lastBackupAt)}` : "Drive listo",
-      );
+      setBackupMessage(`Drive y esta PC al dia - ${formatBackupDate(status.lastBackupAt)}`);
     };
 
     const start = async () => {
       let mode: "desktop" | "browser" = "browser";
+      setBootScreen({
+        active: true,
+        progress: 8,
+        message: "CARGANDO SISTEMA...",
+        detail: "Activando escritorio local",
+        mode: "startup",
+      });
       try {
         const result = await initializeDesktop();
         mode = "mode" in result ? result.mode : "desktop";
@@ -162,26 +302,60 @@ function App() {
       }
       if (cancelled) return;
       setAppMode(mode);
+      setBootScreen({
+        active: true,
+        progress: 28,
+        message: "CARGANDO PRODUCTOS...",
+        detail: "Leyendo base local y carpetas de productos",
+        mode: "startup",
+      });
       await loadProducts();
       if (mode === "desktop") {
-        void checkStartupUpdate().catch(() => {
-          // The startup check must never block local work.
-        });
         try {
+          setBootScreen({
+            active: true,
+            progress: 52,
+            message: "SINCRONIZANDO DRIVE...",
+            detail: "Comparando esta PC con Google Drive",
+            mode: "startup",
+          });
           await syncBackup("startup");
         } catch (error) {
           if (!cancelled) {
             setBackupMessage(error instanceof Error ? error.message : "No pude revisar Drive");
           }
         }
+        setBootScreen({
+          active: true,
+          progress: 78,
+          message: "VERIFICANDO VERSION...",
+          detail: "Buscando actualizaciones disponibles",
+          mode: "startup",
+        });
+        await checkStartupUpdate().catch(() => {
+          // The startup check must never block local work.
+        });
       } else {
         setBackupMessage("Backup disponible en escritorio");
       }
+      if (cancelled) return;
+      setBootScreen({
+        active: true,
+        progress: 100,
+        message: "SISTEMA EN LINEA",
+        detail: "ROXWANA listo para trabajar",
+        mode: "startup",
+      });
+      window.setTimeout(() => {
+        if (!cancelled) setBootScreen((current) => ({ ...current, active: false }));
+      }, 420);
     };
 
     void start();
     const intervalId = window.setInterval(() => {
-      void syncBackup("daily").catch((error) => {
+      void (async () => {
+        await Promise.allSettled([syncBackup("daily"), checkStartupUpdate()]);
+      })().catch((error) => {
         if (!cancelled) {
           setBackupMessage(error instanceof Error ? error.message : "No pude actualizar Drive");
         }
@@ -192,7 +366,7 @@ function App() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [settings.backupEnabled, settings.backupFrequencyDays, settings.backupRoot]);
+  }, [settings.backupEnabled, settings.backupRoot]);
 
   const toggleSidebar = () => {
     setSidebarCollapsed((collapsed) => {
@@ -228,11 +402,15 @@ function App() {
       case "history":
         return <HistoryView products={products} onOpen={openProduct} />;
       case "settings":
-        return <SettingsView appMode={appMode} onProductsChanged={refreshProducts} />;
+        return <SettingsView appMode={appMode} onProductsChanged={refreshProducts} onInstallUpdate={installUpdate} />;
       default:
         return null;
     }
   };
+
+  if (bootScreen.active) {
+    return <RoxwanaLoadingScreen state={bootScreen} />;
+  }
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""}`}>
@@ -313,21 +491,41 @@ function App() {
           </div>
         </header>
 
-        {startupUpdate?.status === "available" && (
-          <div className="app-update-banner">
+        {startupUpdate?.status === "available" && !updateDismissed.current && !updateScreen.active && (
+          <div className="update-dialog-backdrop">
+            <section className="update-dialog">
             <CloudDownload size={17} />
             <span>
               Nueva version disponible: {startupUpdate.version}
               {startupInstall ? ` · ${startupInstall.message}` : ""}
               {startupInstall && typeof startupInstall.progress === "number" ? ` ${startupInstall.progress}%` : ""}
             </span>
-            <Button size="sm" variant="primary" onClick={() => void installStartupUpdate()} loading={startupUpdateBusy}>
-              Instalar ahora
+            <Button size="sm" variant="primary" onClick={() => void installUpdate(startupUpdate)} loading={startupUpdateBusy}>
+              Actualizar ahora
             </Button>
-            <Button size="sm" onClick={() => setStartupUpdate(null)} disabled={startupUpdateBusy}>
-              Despues
+            <Button
+              size="sm"
+              onClick={() => {
+                updateDismissed.current = true;
+                setStartupUpdate(null);
+              }}
+              disabled={startupUpdateBusy}
+            >
+              Mas tarde
             </Button>
+            </section>
           </div>
+        )}
+
+        {updateScreen.active && (
+          <RoxwanaLoadingScreen
+            state={updateScreen}
+            onClose={
+              updateScreen.error
+                ? () => setUpdateScreen((current) => ({ ...current, active: false }))
+                : undefined
+            }
+          />
         )}
 
         <div className="workspace__content" key={view}>
