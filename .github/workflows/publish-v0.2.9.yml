@@ -1,0 +1,41 @@
+name: Publish ROXWANA 0.2.9
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-v0.2.9.yml"
+      - "docs/updater/latest.json"
+      - "release-assets/v0.2.9/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view v0.2.9 >/dev/null 2>&1; then
+            gh release create v0.2.9 \
+              --target 4eed8b669579133fafbfb02c188a5f0269025bc2 \
+              --title "ROXWANA Product Manager 0.2.9" \
+              --notes "Corrige el guardado de productos con multiples colores e imagenes para que una vista previa interna no bloquee la carpeta, la base ni los codigos." \
+              --latest
+          fi
+
+          gh release upload v0.2.9 \
+            "release-assets/v0.2.9/ROXWANA Product Manager_0.2.9_x64-setup.exe" \
+            "release-assets/v0.2.9/ROXWANA Product Manager_0.2.9_x64-setup.exe.sig" \
+            "docs/updater/latest.json" \
+            --clobber
