@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { initializeDesktop, listProducts } from "../services/desktopService";
+import { checkOllamaStatus, type OllamaStatus } from "../services/ollamaService";
 import { Button } from "../components/ui";
 import {
   formatBackupDate,
@@ -30,9 +31,11 @@ import {
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
+  getInstalledVersion,
   type UpdateCheckResult,
   type UpdateInstallStatus,
 } from "../services/updateService";
+import roxwanaLogo from "../assets/roxwana-logo-transparent.png";
 import { useProductStore } from "../store/useProductStore";
 import type { ProductDraft } from "../types/product";
 import Studio from "../features/studio/Studio";
@@ -80,6 +83,21 @@ interface LoadingScreenState {
   version?: string;
 }
 
+interface StartupServiceState {
+  ollama: OllamaStatus | null;
+  installedVersion: string;
+}
+
+async function settleWithTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timeoutId = 0;
+  return Promise.race([
+    promise.catch(() => fallback),
+    new Promise<T>((resolve) => {
+      timeoutId = window.setTimeout(() => resolve(fallback), ms);
+    }),
+  ]).finally(() => window.clearTimeout(timeoutId));
+}
+
 function RoxwanaLoadingScreen({
   state,
   onClose,
@@ -105,7 +123,7 @@ function RoxwanaLoadingScreen({
         </div>
         <div className="system-loader__brand">
           <div className="system-loader__seal">
-            <span>RXW</span>
+            <img src={roxwanaLogo} alt="ROXWANA" />
           </div>
           <div>
             <strong>ROXWANA</strong>
@@ -153,6 +171,10 @@ function App() {
   const [startupUpdate, setStartupUpdate] = useState<UpdateCheckResult | null>(null);
   const [startupInstall, setStartupInstall] = useState<UpdateInstallStatus | null>(null);
   const [startupUpdateBusy, setStartupUpdateBusy] = useState(false);
+  const [startupServices, setStartupServices] = useState<StartupServiceState>({
+    ollama: null,
+    installedVersion: "",
+  });
   const [bootScreen, setBootScreen] = useState<LoadingScreenState>({
     active: true,
     progress: 4,
@@ -188,6 +210,19 @@ function App() {
     if (result.status === "available" && !updateDismissed.current) {
       setStartupUpdate(result);
     }
+  };
+
+  const warmStartupServices = async (): Promise<StartupServiceState> => {
+    const ollamaFallback: OllamaStatus = {
+      connected: false,
+      models: [],
+      error: "Ollama no respondio durante la carga inicial",
+    };
+    const [ollama, installedVersion] = await Promise.all([
+      settleWithTimeout(checkOllamaStatus(settings.ollamaEndpoint), 7000, ollamaFallback),
+      getInstalledVersion().catch(() => ""),
+    ]);
+    return { ollama, installedVersion };
   };
 
   const installUpdate = async (updateResult: AvailableUpdate) => {
@@ -341,6 +376,16 @@ function App() {
       if (cancelled) return;
       setBootScreen({
         active: true,
+        progress: 90,
+        message: "PREPARANDO AJUSTES...",
+        detail: "Chequeando IA local y version instalada",
+        mode: "startup",
+      });
+      const services = await warmStartupServices();
+      if (!cancelled) setStartupServices(services);
+      if (cancelled) return;
+      setBootScreen({
+        active: true,
         progress: 100,
         message: "SISTEMA EN LINEA",
         detail: "ROXWANA listo para trabajar",
@@ -398,11 +443,29 @@ function App() {
       case "search":
         return <SearchView onOpen={openProduct} onProductsChanged={refreshProducts} />;
       case "backup":
-        return <BackupView onProductsChanged={refreshProducts} />;
+        return (
+          <BackupView
+            onProductsChanged={refreshProducts}
+            initialBackupStatus={backupStatus}
+            initialBackupMessage={backupMessage}
+            initialBackupRoot={settings.backupRoot}
+          />
+        );
       case "history":
         return <HistoryView products={products} onOpen={openProduct} />;
       case "settings":
-        return <SettingsView appMode={appMode} onProductsChanged={refreshProducts} onInstallUpdate={installUpdate} />;
+        return (
+          <SettingsView
+            appMode={appMode}
+            onProductsChanged={refreshProducts}
+            onInstallUpdate={installUpdate}
+            initialOllamaStatus={startupServices.ollama}
+            initialInstalledVersion={startupServices.installedVersion}
+            initialBackupStatus={backupStatus}
+            initialBackupMessage={backupMessage}
+            initialBackupRoot={settings.backupRoot}
+          />
+        );
       default:
         return null;
     }

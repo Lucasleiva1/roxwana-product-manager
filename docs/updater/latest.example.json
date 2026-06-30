@@ -1,11 +1,11 @@
 {
-  "version": "0.2.7",
-  "notes": "Agrega pantalla de carga, filtros de publicacion y sincronizacion automatica con Drive.",
-  "pub_date": "2026-06-29T00:00:00Z",
+  "version": "0.2.8",
+  "notes": "Agrega logo real en la carga, filtros desplegables de publicacion y precarga de servicios para evitar bloqueos al abrir Ajustes.",
+  "pub_date": "2026-06-30T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
       "signature": "PEGAR_ACA_EL_CONTENIDO_REAL_DEL_ARCHIVO_SIG",
-      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.7/ROXWANA.Product.Manager_0.2.7_x64-setup.exe"
+      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.8/ROXWANA.Product.Manager_0.2.8_x64-setup.exe"
     }
   }
 }

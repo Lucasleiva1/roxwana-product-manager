@@ -1,6 +1,6 @@
 [package]
 name = "roxwana-product-manager"
-version = "0.2.7"
+version = "0.2.8"
 description = "ROXWANA Product Manager"
 authors = ["ROXWANA"]
 edition = "2021"

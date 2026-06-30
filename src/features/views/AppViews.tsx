@@ -5,6 +5,8 @@ import {
   ArrowRight,
   Barcode,
   Box,
+  Check,
+  ChevronDown,
   CloudCog,
   CloudDownload,
   CloudUpload,
@@ -14,6 +16,7 @@ import {
   FileOutput,
   Folder,
   Eye,
+  ListFilter,
   Layers3,
   LayoutGrid,
   LayoutList,
@@ -71,10 +74,10 @@ import {
 import {
   checkOllamaStatus,
   RECOMMENDED_OLLAMA_MODELS,
+  type OllamaStatus,
 } from "../../services/ollamaService";
 import {
   checkForUpdates,
-  getInstalledVersion,
   type UpdateCheckResult,
   type UpdateInstallStatus,
 } from "../../services/updateService";
@@ -94,6 +97,16 @@ function formatDate(value: string) {
     month: "short",
     year: "numeric",
   }).format(new Date(value));
+}
+
+async function settleWithTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timeoutId = 0;
+  return Promise.race([
+    promise.catch(() => fallback),
+    new Promise<T>((resolve) => {
+      timeoutId = window.setTimeout(() => resolve(fallback), ms);
+    }),
+  ]).finally(() => window.clearTimeout(timeoutId));
 }
 
 function coverImage(product: ProductDraft) {
@@ -159,7 +172,7 @@ function matchesPublicationFilter(product: ProductDraft, filter: PublicationFilt
   return true;
 }
 
-function PublicationFilterTabs({
+function PublicationFilterDropdown({
   value,
   onChange,
   products,
@@ -168,19 +181,67 @@ function PublicationFilterTabs({
   onChange: (value: PublicationFilter) => void;
   products: ProductDraft[];
 }) {
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const selectedFilter = PUBLICATION_FILTERS.find((filter) => filter.id === value) ?? PUBLICATION_FILTERS[0];
+  const countFor = (filter: PublicationFilter) =>
+    products.filter((product) => matchesPublicationFilter(product, filter)).length;
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (dropdownRef.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutsideClick);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutsideClick);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
   return (
-    <div className="publication-filter-tabs" aria-label="Filtros de publicacion">
-      {PUBLICATION_FILTERS.map((filter) => (
-        <button
-          type="button"
-          key={filter.id}
-          className={value === filter.id ? "active" : ""}
-          onClick={() => onChange(filter.id)}
-        >
-          <span>{filter.label}</span>
-          <strong>{products.filter((product) => matchesPublicationFilter(product, filter.id)).length}</strong>
-        </button>
-      ))}
+    <div className="publication-filter-dropdown" ref={dropdownRef}>
+      <button
+        type="button"
+        className="publication-filter-dropdown__button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <ListFilter size={15} />
+        <span>{selectedFilter.label}</span>
+        <strong>{countFor(selectedFilter.id)}</strong>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div className="publication-filter-menu" role="menu" aria-label="Filtros de publicacion">
+          {PUBLICATION_FILTERS.map((filter) => {
+            const active = value === filter.id;
+            return (
+              <button
+                type="button"
+                key={filter.id}
+                className={active ? "active" : ""}
+                role="menuitemradio"
+                aria-checked={active}
+                onClick={() => {
+                  onChange(filter.id);
+                  setOpen(false);
+                }}
+              >
+                <Check size={13} />
+                <span>{filter.label}</span>
+                <strong>{countFor(filter.id)}</strong>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -595,13 +656,20 @@ function backupTone(status: BackupStatus | null): "success" | "warning" | "dange
 function BackupDriveControl({
   backupRoot,
   onRestored,
+  initialStatus,
+  initialMessage,
+  initialBackupRoot,
 }: {
   backupRoot?: string;
   onRestored?: () => void | Promise<void>;
+  initialStatus?: BackupStatus | null;
+  initialMessage?: string;
+  initialBackupRoot?: string;
 }) {
-  const [status, setStatus] = useState<BackupStatus | null>(null);
-  const [busy, setBusy] = useState<"status" | "sync" | "">("status");
-  const [message, setMessage] = useState("");
+  const canUseInitialStatus = backupRoot === initialBackupRoot && Boolean(initialStatus || initialMessage);
+  const [status, setStatus] = useState<BackupStatus | null>(canUseInitialStatus ? initialStatus ?? null : null);
+  const [busy, setBusy] = useState<"status" | "sync" | "">(canUseInitialStatus ? "" : "status");
+  const [message, setMessage] = useState(canUseInitialStatus ? initialMessage || initialStatus?.message || "" : "");
 
   const loadStatus = async () => {
     setBusy("status");
@@ -617,8 +685,14 @@ function BackupDriveControl({
   };
 
   useEffect(() => {
+    if (backupRoot === initialBackupRoot && (initialStatus || initialMessage)) {
+      setStatus(initialStatus ?? null);
+      setMessage(initialMessage || initialStatus?.message || "");
+      setBusy((current) => (current === "status" ? "" : current));
+      return;
+    }
     void loadStatus();
-  }, [backupRoot]);
+  }, [backupRoot, initialBackupRoot, initialMessage, initialStatus]);
 
   const updateNow = async () => {
     setBusy("sync");
@@ -665,6 +739,16 @@ function BackupDriveControl({
     }
   };
 
+  const statusLabel = !status
+    ? busy === "status"
+      ? "Revisando Drive"
+      : "Drive sin revisar"
+    : status.available
+      ? status.backupExists
+        ? "Backup conectado"
+        : "Drive detectado"
+      : "Drive no detectado";
+
   return (
     <div className="backup-drive">
       <div className="backup-drive__summary">
@@ -672,15 +756,7 @@ function BackupDriveControl({
           <CloudCog size={20} />
         </span>
         <div>
-          <StatusDot status={backupTone(status)}>
-            {!status
-              ? "Revisando Drive"
-              : status.available
-                ? status.backupExists
-                  ? "Backup conectado"
-                  : "Drive detectado"
-                : "Drive no detectado"}
-          </StatusDot>
+          <StatusDot status={backupTone(status)}>{statusLabel}</StatusDot>
           <strong>{formatBackupDate(status?.lastBackupAt)}</strong>
           <small>{message || "Actualizar decide automaticamente si esta PC sube cambios o baja la copia nueva."}</small>
         </div>
@@ -884,8 +960,14 @@ export function DashboardView({
 
 export function BackupView({
   onProductsChanged,
+  initialBackupStatus,
+  initialBackupMessage,
+  initialBackupRoot,
 }: {
   onProductsChanged: () => void | Promise<void>;
+  initialBackupStatus?: BackupStatus | null;
+  initialBackupMessage?: string;
+  initialBackupRoot?: string;
 }) {
   const settings = useProductStore((state) => state.settings);
 
@@ -901,7 +983,13 @@ export function BackupView({
 
       <div className="backup-page-grid">
         <Panel title="Sincronizacion principal" eyebrow="Automatico" icon={<CloudCog size={18} />}>
-          <BackupDriveControl backupRoot={settings.backupRoot} onRestored={onProductsChanged} />
+          <BackupDriveControl
+            backupRoot={settings.backupRoot}
+            onRestored={onProductsChanged}
+            initialStatus={initialBackupStatus}
+            initialMessage={initialBackupMessage}
+            initialBackupRoot={initialBackupRoot}
+          />
         </Panel>
 
         <Panel title="Como usarlo" eyebrow="Por turnos" icon={<CloudUpload size={18} />}>
@@ -952,12 +1040,15 @@ export function ProductsView({
   const [deleteTarget, setDeleteTarget] = useState<ProductDraft | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const dragImageFiles = useRef(new Map<string, File>());
-  const visible = products.filter((product) => {
-    const matchesText = `${product.name} ${product.modelCode} ${product.status}`
-      .toLowerCase()
-      .includes(filter.toLowerCase());
-    return matchesText && matchesPublicationFilter(product, publicationFilter);
-  });
+  const visible = useMemo(() => {
+    const normalizedFilter = filter.toLowerCase();
+    return products.filter((product) => {
+      const matchesText = `${product.name} ${product.modelCode} ${product.status}`
+        .toLowerCase()
+        .includes(normalizedFilter);
+      return matchesText && matchesPublicationFilter(product, publicationFilter);
+    });
+  }, [filter, products, publicationFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1225,7 +1316,6 @@ export function ProductsView({
             placeholder="Filtrar por nombre, modelo o estado..."
           />
         </div>
-        <PublicationFilterTabs value={publicationFilter} onChange={setPublicationFilter} products={products} />
         <div className="view-switch" aria-label="Vista de productos">
           {[
             ["cards", LayoutGrid, "Tarjetas"],
@@ -1244,6 +1334,7 @@ export function ProductsView({
             </button>
           ))}
         </div>
+        <PublicationFilterDropdown value={publicationFilter} onChange={setPublicationFilter} products={products} />
         <StatusDot status="neutral">{visible.length} resultados</StatusDot>
       </div>
       {visible.length ? (
@@ -1399,7 +1490,6 @@ export function SearchView({
         </Button>
       </div>
       <div className="page-toolbar search-view-toolbar">
-        <PublicationFilterTabs value={publicationFilter} onChange={setPublicationFilter} products={results} />
         <div className="view-switch" aria-label="Vista del buscador">
           {[
             ["cards", LayoutGrid, "Tarjetas"],
@@ -1418,6 +1508,7 @@ export function SearchView({
             </button>
           ))}
         </div>
+        <PublicationFilterDropdown value={publicationFilter} onChange={setPublicationFilter} products={results} />
         <StatusDot status="neutral">
           {visibleResults.length} resultados · {pinnedProducts.length} anclados
         </StatusDot>
@@ -1679,24 +1770,35 @@ export function SettingsView({
   appMode,
   onProductsChanged,
   onInstallUpdate,
+  initialOllamaStatus,
+  initialInstalledVersion,
+  initialBackupStatus,
+  initialBackupMessage,
+  initialBackupRoot,
 }: {
   appMode: "desktop" | "browser";
   onProductsChanged: () => void | Promise<void>;
   onInstallUpdate: (update: Extract<UpdateCheckResult, { status: "available" }>) => Promise<void>;
+  initialOllamaStatus?: OllamaStatus | null;
+  initialInstalledVersion?: string;
+  initialBackupStatus?: BackupStatus | null;
+  initialBackupMessage?: string;
+  initialBackupRoot?: string;
 }) {
   const { settings, setSettings } = useProductStore();
   const [form, setForm] = useState<AppSettings>(settings);
-  const [ollama, setOllama] = useState<{ connected: boolean; models: string[] }>({
-    connected: false,
-    models: [],
-  });
+  const [ollama, setOllama] = useState<{ connected: boolean; models: string[] }>(() => ({
+    connected: Boolean(initialOllamaStatus?.connected),
+    models: initialOllamaStatus?.models ?? [],
+  }));
   const [saved, setSaved] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
-  const [installedVersion, setInstalledVersion] = useState("");
+  const [installedVersion, setInstalledVersion] = useState(initialInstalledVersion || "");
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateInstall, setUpdateInstall] = useState<UpdateInstallStatus | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [ollamaBusy, setOllamaBusy] = useState(false);
   const selectableModels = useMemo(() => {
     const names = new Set([...ollama.models, ...RECOMMENDED_OLLAMA_MODELS.map((model) => model.name)]);
     return [...names];
@@ -1728,12 +1830,23 @@ export function SettingsView({
     }
   };
 
-  const testOllama = async () => {
-    const status = await checkOllamaStatus(form.ollamaEndpoint);
+  const applyOllamaStatus = (status: OllamaStatus) => {
     setOllama({ connected: status.connected, models: status.models });
     if (status.connected && !form.ollamaModel && status.models[0]) {
       setForm((current) => ({ ...current, ollamaModel: status.models[0] }));
     }
+  };
+
+  const testOllama = async () => {
+    const fallback: OllamaStatus = {
+      connected: false,
+      models: [],
+      error: "Ollama no respondio a tiempo.",
+    };
+    setOllamaBusy(true);
+    const status = await settleWithTimeout(checkOllamaStatus(form.ollamaEndpoint), 7000, fallback);
+    applyOllamaStatus(status);
+    setOllamaBusy(false);
   };
 
   const runUpdateCheck = async () => {
@@ -1763,9 +1876,14 @@ export function SettingsView({
   };
 
   useEffect(() => {
-    void testOllama();
-    void getInstalledVersion().then(setInstalledVersion).catch(() => setInstalledVersion(""));
-  }, []);
+    if (initialOllamaStatus) applyOllamaStatus(initialOllamaStatus);
+  }, [initialOllamaStatus]);
+
+  useEffect(() => {
+    if (initialInstalledVersion) {
+      setInstalledVersion(initialInstalledVersion);
+    }
+  }, [initialInstalledVersion]);
 
   return (
     <div className="page">
@@ -1802,7 +1920,13 @@ export function SettingsView({
         <div className="settings-side">
           <Panel title="Backup en Google Drive" eyebrow="Drive local" icon={<CloudCog size={18} />}>
             <div className="settings-fields">
-              <BackupDriveControl backupRoot={form.backupRoot} onRestored={onProductsChanged} />
+              <BackupDriveControl
+                backupRoot={form.backupRoot}
+                onRestored={onProductsChanged}
+                initialStatus={initialBackupStatus}
+                initialMessage={initialBackupMessage}
+                initialBackupRoot={initialBackupRoot}
+              />
               <div className="settings-toggle-row">
                 <span>
                   <strong>Backup automatico</strong>
@@ -1902,7 +2026,7 @@ export function SettingsView({
                   />
                 )}
               </label>
-              <Button onClick={testOllama}>
+              <Button onClick={() => void testOllama()} loading={ollamaBusy}>
                 <RefreshCw size={15} /> Probar conexión
               </Button>
               <StatusDot status={ollama.connected ? "success" : "warning"}>
