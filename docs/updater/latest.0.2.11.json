@@ -1,4 +1,4 @@
-﻿{
+{
     "version":  "0.2.11",
     "notes":  "Agrega tablero compacto para cargar muchas imagenes juntas, elegir portada, ordenar roles y renombrar archivos. La IA queda enfocada en descripcion corta y larga, y se corrige el aviso de actualizacion.",
     "pub_date":  "2026-06-30T00:00:00Z",
