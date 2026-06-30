@@ -1,0 +1,41 @@
+name: Publish ROXWANA 0.2.10
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-v0.2.10.yml"
+      - "docs/updater/latest.json"
+      - "release-assets/v0.2.10/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view v0.2.10 >/dev/null 2>&1; then
+            gh release create v0.2.10 \
+              --target "${GITHUB_SHA}" \
+              --title "ROXWANA Product Manager 0.2.10" \
+              --notes "El guardado local ya no se bloquea si Google Drive falla. Cuando el backup no sube, queda marcado como Drive pendiente con boton para reintentar despues." \
+              --latest
+          fi
+
+          gh release upload v0.2.10 \
+            "release-assets/v0.2.10/ROXWANA Product Manager_0.2.10_x64-setup.exe" \
+            "release-assets/v0.2.10/ROXWANA Product Manager_0.2.10_x64-setup.exe.sig" \
+            "docs/updater/latest.json" \
+            --clobber

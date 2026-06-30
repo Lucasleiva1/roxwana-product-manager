@@ -25,6 +25,7 @@ struct DatabaseInfo {
 #[serde(rename_all = "camelCase")]
 struct FolderResult {
     folder_path: String,
+    backup_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1189,13 +1190,15 @@ fn run_backup_operation(
     })
 }
 
-fn run_required_save_backup(app: &AppHandle, reason: &str) -> Result<(), String> {
+fn run_required_save_backup(app: &AppHandle, reason: &str) -> Option<String> {
     run_backup_operation(app, None, Some(reason.to_string()))
-        .map(|_| ())
-        .map_err(|error| {
-            format!(
+        .err()
+        .map(|error| {
+            let message = format!(
                 "El cambio se guardo localmente, pero no pude subir el backup automatico a Drive: {error}"
-            )
+            );
+            eprintln!("{message}");
+            message
         })
 }
 
@@ -1414,10 +1417,11 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
             .map_err(|error| error.to_string())?;
     }
     transaction.commit().map_err(|error| error.to_string())?;
-    run_required_save_backup(&app, &format!("auto-save-product-{}", input.model_code))?;
+    let backup_error = run_required_save_backup(&app, &format!("auto-save-product-{}", input.model_code));
 
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
+        backup_error,
     })
 }
 
@@ -1491,7 +1495,7 @@ fn delete_product(app: AppHandle, product_id: String) -> Result<(), String> {
     let backup_reason = deleted_model_code
         .as_deref()
         .unwrap_or(product_id.as_str());
-    run_required_save_backup(&app, &format!("auto-delete-product-{backup_reason}"))?;
+    let _ = run_required_save_backup(&app, &format!("auto-delete-product-{backup_reason}"));
     Ok(())
 }
 
@@ -1560,6 +1564,7 @@ fn create_product_folder(
     .map_err(|error| error.to_string())?;
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
+        backup_error: None,
     })
 }
 
@@ -1580,7 +1585,7 @@ fn write_product_files(
         serde_json::to_string_pretty(&product).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    run_required_save_backup(&app, &format!("auto-save-files-{}", input.model_code))?;
+    let _ = run_required_save_backup(&app, &format!("auto-save-files-{}", input.model_code));
     Ok(SheetResult {
         sheet_path: sheet_path.to_string_lossy().to_string(),
     })
@@ -1647,6 +1652,7 @@ fn product_package_folder(app: AppHandle, model_code: String) -> Result<FolderRe
     let folder = product_folder(&app, &model_code)?;
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
+        backup_error: None,
     })
 }
 
@@ -1657,6 +1663,7 @@ fn open_product_package_folder(app: AppHandle, model_code: String) -> Result<Fol
     open_folder_with_explorer(&folder)?;
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
+        backup_error: None,
     })
 }
 
@@ -1785,6 +1792,7 @@ fn save_product_package(
 
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
+        backup_error: None,
     })
 }
 
@@ -1825,6 +1833,7 @@ fn save_print_files(
             .join("trabajos-para-impresion")
             .to_string_lossy()
             .to_string(),
+        backup_error: None,
     })
 }
 

@@ -41,6 +41,72 @@ const welcomeMessage = (): AssistantMessage => ({
   source: "system",
 });
 
+const DRAFT_STORAGE_KEY = "roxwana-current-draft-v1";
+
+function hasDraftContent(draft: ProductDraft) {
+  return Boolean(
+    draft.modelCode ||
+      draft.name ||
+      draft.shortDescription ||
+      draft.longDescription ||
+      draft.material ||
+      draft.colors.length ||
+      draft.sizes.length ||
+      draft.images.length ||
+      draft.variants.length,
+  );
+}
+
+function draftForStorage(draft: ProductDraft): ProductDraft {
+  return {
+    ...draft,
+    images: draft.images.map(({ previewUrl, ...image }) => image),
+  };
+}
+
+function persistDraft(draft: ProductDraft) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    if (hasDraftContent(draft)) {
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draftForStorage(draft)));
+    } else {
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+    }
+  } catch {
+    // Local recovery is best effort; it must never interrupt editing.
+  }
+}
+
+function clearPersistedDraft() {
+  try {
+    localStorage.removeItem(DRAFT_STORAGE_KEY);
+  } catch {
+    // Nothing to do.
+  }
+}
+
+function draftFromStorage() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || "null") as ProductDraft | null;
+    if (!stored || !hasDraftContent(stored)) return null;
+    return {
+      ...makeEmptyDraft(),
+      ...stored,
+      publication: {
+        whatsapp: Boolean(stored.publication?.whatsapp),
+        web: Boolean(stored.publication?.web),
+      },
+      tags: Array.isArray(stored.tags) ? stored.tags : [],
+      colors: Array.isArray(stored.colors) ? stored.colors : [],
+      sizes: Array.isArray(stored.sizes) ? stored.sizes : [],
+      variants: Array.isArray(stored.variants) ? stored.variants : [],
+      images: Array.isArray(stored.images) ? stored.images : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
 interface ProductState {
   draft: ProductDraft;
   messages: AssistantMessage[];
@@ -94,13 +160,16 @@ const settingsFromStorage = (): AppSettings => {
 };
 
 export const useProductStore = create<ProductState>((set, get) => ({
-  draft: makeEmptyDraft(),
+  draft: draftFromStorage() ?? makeEmptyDraft(),
   messages: [welcomeMessage()],
   settings: settingsFromStorage(),
   manualMode: false,
   selectedTone: "rockera",
   folderPath: "",
-  setDraft: (draft) => set({ draft }),
+  setDraft: (draft) => {
+    persistDraft(draft);
+    set({ draft });
+  },
   patchDraft: (patch) =>
     set((state) => {
       const next = { ...state.draft, ...patch, updatedAt: new Date().toISOString() };
@@ -121,12 +190,18 @@ export const useProductStore = create<ProductState>((set, get) => ({
           state.draft.variants,
         );
       }
+      persistDraft(next);
       return { draft: next };
     }),
-  applyExtractedBrief: (brief) => set((state) => ({ draft: applyBriefToDraft(state.draft, brief) })),
+  applyExtractedBrief: (brief) =>
+    set((state) => {
+      const draft = applyBriefToDraft(state.draft, brief);
+      persistDraft(draft);
+      return { draft };
+    }),
   setColors: (colors) =>
-    set((state) => ({
-      draft: {
+    set((state) => {
+      const draft = {
         ...state.draft,
         colors,
         variants: generateVariants(
@@ -135,11 +210,13 @@ export const useProductStore = create<ProductState>((set, get) => ({
           state.draft.sizes,
           state.draft.variants,
         ),
-      },
-    })),
+      };
+      persistDraft(draft);
+      return { draft };
+    }),
   setSizes: (sizes) =>
-    set((state) => ({
-      draft: {
+    set((state) => {
+      const draft = {
         ...state.draft,
         sizes,
         variants: generateVariants(
@@ -148,38 +225,54 @@ export const useProductStore = create<ProductState>((set, get) => ({
           sizes,
           state.draft.variants,
         ),
-      },
-    })),
+      };
+      persistDraft(draft);
+      return { draft };
+    }),
   setVariantStock: (sku, stock) =>
-    set((state) => ({
-      draft: {
+    set((state) => {
+      const draft = {
         ...state.draft,
         variants: state.draft.variants.map((variant) =>
           variant.sku === sku ? { ...variant, stock: Math.max(0, stock) } : variant,
         ),
-      },
-    })),
+      };
+      persistDraft(draft);
+      return { draft };
+    }),
   addImage: (image) =>
-    set((state) => ({ draft: { ...state.draft, images: [...state.draft.images, image] } })),
+    set((state) => {
+      const draft = { ...state.draft, images: [...state.draft.images, image] };
+      persistDraft(draft);
+      return { draft };
+    }),
   patchImage: (id, patch) =>
-    set((state) => ({
-      draft: {
+    set((state) => {
+      const draft = {
         ...state.draft,
         images: state.draft.images.map((image) => (image.id === id ? { ...image, ...patch } : image)),
-      },
-    })),
+      };
+      persistDraft(draft);
+      return { draft };
+    }),
   removeImage: (id) =>
-    set((state) => ({
-      draft: {
+    set((state) => {
+      const draft = {
         ...state.draft,
         images: state.draft.images.filter((image) => image.id !== id),
-      },
-    })),
+      };
+      persistDraft(draft);
+      return { draft };
+    }),
   regenerateDescriptions: (tone = get().selectedTone) =>
-    set((state) => ({
-      selectedTone: tone,
-      draft: { ...state.draft, ...generateDescriptions(state.draft, tone) },
-    })),
+    set((state) => {
+      const draft = { ...state.draft, ...generateDescriptions(state.draft, tone) };
+      persistDraft(draft);
+      return {
+        selectedTone: tone,
+        draft,
+      };
+    }),
   addMessage: (message) =>
     set((state) => ({
       messages: [
@@ -196,5 +289,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
       return { settings: next };
     }),
   setFolderPath: (folderPath) => set({ folderPath }),
-  resetDraft: () => set({ draft: makeEmptyDraft(), folderPath: "", messages: [welcomeMessage()] }),
+  resetDraft: () => {
+    clearPersistedDraft();
+    set({ draft: makeEmptyDraft(), folderPath: "", messages: [welcomeMessage()] });
+  },
 }));

@@ -1,11 +1,11 @@
 {
-  "version": "0.2.9",
-  "notes": "Corrige el guardado de productos con multiples colores e imagenes para que una vista previa interna no bloquee la carpeta, la base ni los codigos.",
+  "version": "0.2.10",
+  "notes": "El guardado local ya no se bloquea si Google Drive falla. Cuando el backup no sube, queda marcado como Drive pendiente con boton para reintentar despues.",
   "pub_date": "2026-06-30T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUZHVDc2dYUlNUaFYwSUNRQ2twT2VhckVmR2Zmc1FUQS9LMkRSZ0c1a3hhWWRwd0pkWGtxZHBnTndlR1ExWUkzbUJaZWdQUmFuTG9wZ1BLS1NHTzQ0OSttZmlNb3N0WXcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODQ3NjQwCWZpbGU6Uk9YV0FOQSBQcm9kdWN0IE1hbmFnZXJfMC4yLjlfeDY0LXNldHVwLmV4ZQpjUUFHRFoveFhRbkc1WVhBUlVxdWhrcjRRK0NFUE85amxaSTRIYUozZnB5aTVmdDZuZTlwVFZSR1pHMjBQRGxXeG1udlcyYWhhcGJMeml4N0xCNUZEUT09Cg==",
-      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.9/ROXWANA.Product.Manager_0.2.9_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUZHVDc2dYUlNUaFRYMmY2SU5GdXEzQnZ0OThSWmpOQjMyRjdqN0xGU2FZY2E2V3JOVnVtd0hONU9oaUVyNGd0aDRiS3FseVhvb0xxa0hHRVFpNEdXKzFxRVVxVEllQXdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODUwMzkzCWZpbGU6Uk9YV0FOQSBQcm9kdWN0IE1hbmFnZXJfMC4yLjEwX3g2NC1zZXR1cC5leGUKSENzTm5laC9JMFh6bGRiYXlCeWpzajhPV1FPNU9CMHRWV005ZUpGY1lma0ZQdWJCbE1zT0MzVjJWWXJIY0l3Y081YWpLU2Q3ZmxqcncrbFZCTUJSQ2c9PQo=",
+      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.10/ROXWANA.Product.Manager_0.2.10_x64-setup.exe"
     }
   }
 }

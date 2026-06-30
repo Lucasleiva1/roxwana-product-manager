@@ -62,6 +62,11 @@ export interface ProductPackagePayload {
   whatsappImage?: ProductPackageWhatsAppImage;
 }
 
+export interface FolderSaveResult {
+  folderPath: string;
+  backupError?: string | null;
+}
+
 function readLocalProducts(): ProductDraft[] {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]") as ProductDraft[];
@@ -75,13 +80,13 @@ function writeLocalProducts(products: ProductDraft[]) {
 }
 
 async function invokeSaveProduct(product: ProductDraft) {
-  const result = await invoke<{ folderPath: string }>("save_product", { product: packageProduct(product) });
+  const result = await invoke<FolderSaveResult>("save_product", { product: packageProduct(product) });
   desktopInvokeAvailable = true;
   return result;
 }
 
 async function invokeSaveProductPackage(payload: ProductPackagePayload) {
-  const result = await invoke<{ folderPath: string }>("save_product_package", {
+  const result = await invoke<FolderSaveResult>("save_product_package", {
     payload: { ...payload, product: packageProduct(payload.product) },
   });
   desktopInvokeAvailable = true;
@@ -283,7 +288,7 @@ async function postDevProductPackage(payload: ProductPackagePayload) {
     const text = await response.text();
     throw new Error(text || "No pude crear el paquete del producto.");
   }
-  return response.json() as Promise<{ folderPath: string }>;
+  return response.json() as Promise<FolderSaveResult>;
 }
 
 export async function saveProductPackage(payload: ProductPackagePayload) {
@@ -305,7 +310,7 @@ export async function saveProductPackage(payload: ProductPackagePayload) {
 export async function savePrintFiles(modelCode: string, printFiles: ProductPackagePrintFile[]) {
   if (!printFiles.length) return { folderPath: "" };
   if (isTauri()) {
-    return invoke<{ folderPath: string }>("save_print_files", { modelCode, printFiles });
+    return invoke<FolderSaveResult>("save_print_files", { modelCode, printFiles });
   }
   try {
     const response = await fetch("/api/product-print-files", {
@@ -321,7 +326,7 @@ export async function savePrintFiles(modelCode: string, printFiles: ProductPacka
 }
 
 export async function productPackageFolder(modelCode: string) {
-  if (isTauri()) return invoke<{ folderPath: string }>("product_package_folder", { modelCode });
+  if (isTauri()) return invoke<FolderSaveResult>("product_package_folder", { modelCode });
   try {
     const response = await fetch(`/api/product-package-path?modelCode=${encodeURIComponent(modelCode)}`);
     if (response.ok) return (await response.json()) as { folderPath: string };
@@ -333,7 +338,7 @@ export async function productPackageFolder(modelCode: string) {
 
 export async function openProductPackageFolder(modelCode: string) {
   if (isTauri()) {
-    return invoke<{ folderPath: string }>("open_product_package_folder", { modelCode });
+    return invoke<FolderSaveResult>("open_product_package_folder", { modelCode });
   }
   try {
     const response = await fetch("/api/open-product-package", {

@@ -78,6 +78,7 @@ import {
   suggestProductField,
   warmOllamaModel,
 } from "../../services/ollamaService";
+import { runBackup } from "../../services/backupService";
 import type { AppView } from "../../app/App";
 
 interface StudioProps {
@@ -102,6 +103,17 @@ interface PrintWorkFile {
   type: string;
   size: number;
   savedPath?: string;
+}
+
+function friendlyErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  try {
+    const text = JSON.stringify(error);
+    return text && text !== "{}" ? text : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 const formatPrice = (value: number) =>
@@ -249,6 +261,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [transcribing, setTranscribing] = useState(false);
   const [whisperReady, setWhisperReady] = useState(false);
   const [lastSavedFolder, setLastSavedFolder] = useState("");
+  const [pendingBackup, setPendingBackup] = useState<{ modelCode: string; message: string } | null>(null);
   const [printWorkFiles, setPrintWorkFiles] = useState<PrintWorkFile[]>([]);
 
   const fileInput = useRef<HTMLInputElement>(null);
@@ -966,8 +979,13 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         barcodes: await buildPackageBarcodes(productToSave),
         printFiles: await buildPackagePrintFiles(),
       });
-      await saveProduct(productToSave);
+      const saveResult = await saveProduct(productToSave);
       await onSaved();
+      if (saveResult.backupError) {
+        setPendingBackup({ modelCode: productToSave.modelCode, message: saveResult.backupError });
+      } else {
+        setPendingBackup(null);
+      }
       setFolderPath(packageResult.folderPath);
       setLastSavedFolder(packageResult.folderPath);
       setPreviewOpen(false);
@@ -980,12 +998,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       resetDraft();
       setDraftOpen(false);
       notify(
-        duplicateModel
-          ? "Producto guardado con carpeta, imágenes y códigos. Ya podés crear otro."
+        saveResult.backupError
+          ? "Producto guardado. Drive queda pendiente para subir despues."
           : "Producto guardado con carpeta, imágenes y códigos. Ya podés crear otro.",
       );
     } catch (error) {
-      notify(error instanceof Error ? error.message : "No pude guardar el producto");
+      notify(friendlyErrorMessage(error, "No pude guardar el producto"));
     } finally {
       setActionBusy(null);
     }
@@ -1008,6 +1026,28 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       notify("Carpeta abierta");
     } catch {
       notify("No pude abrir la carpeta. Guarda el producto para crear sus archivos.");
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const handleUploadPendingBackup = async () => {
+    if (!pendingBackup) {
+      notify("No hay backup pendiente.");
+      return;
+    }
+    setActionBusy("backup");
+    try {
+      const result = await runBackup(settings.backupRoot, `manual-pending-${pendingBackup.modelCode}`);
+      if (!result.backedUp) throw new Error(result.message || "Drive todavia no pudo recibir el backup.");
+      setPendingBackup(null);
+      notify("Backup subido a Drive.");
+    } catch (error) {
+      setPendingBackup({
+        ...pendingBackup,
+        message: friendlyErrorMessage(error, "Drive todavia no pudo recibir el backup."),
+      });
+      notify("Drive todavia no pudo recibir el backup.");
     } finally {
       setActionBusy(null);
     }
@@ -1790,6 +1830,20 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 "Acciones del producto"
               )}
             </span>
+            {pendingBackup && (
+              <div className="backup-pending-alert">
+                <strong>Drive pendiente</strong>
+                <small>{pendingBackup.message}</small>
+                <Button
+                  size="sm"
+                  loading={actionBusy === "backup"}
+                  disabled={actionBusy !== null}
+                  onClick={handleUploadPendingBackup}
+                >
+                  <RefreshCw size={14} /> Subir a Drive
+                </Button>
+              </div>
+            )}
             <div>
               <Button variant="danger" onClick={handleDiscardDraft}>
                 <Trash2 size={16} /> Descartar

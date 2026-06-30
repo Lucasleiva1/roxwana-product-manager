@@ -6216,6 +6216,36 @@ textarea:focus-visible {
   gap: 8px;
 }
 
+.creator-actions > .backup-pending-alert {
+  display: grid;
+  width: 100%;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid #7a6126;
+  border-radius: 7px;
+  background: #17140c;
+}
+
+.backup-pending-alert strong,
+.backup-pending-alert small {
+  min-width: 0;
+}
+
+.backup-pending-alert strong {
+  color: #f2d37a;
+  font-size: 11px;
+}
+
+.backup-pending-alert small {
+  color: #d7c99d;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.backup-pending-alert .button {
+  justify-self: flex-start;
+}
+
 .preview-backdrop {
   position: fixed;
   z-index: 100;
