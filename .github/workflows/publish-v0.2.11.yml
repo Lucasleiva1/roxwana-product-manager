@@ -1,0 +1,41 @@
+name: Publish ROXWANA 0.2.11
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-v0.2.11.yml"
+      - "docs/updater/latest.json"
+      - "release-assets/v0.2.11/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view v0.2.11 >/dev/null 2>&1; then
+            gh release create v0.2.11 \
+              --target "${GITHUB_SHA}" \
+              --title "ROXWANA Product Manager 0.2.11" \
+              --notes "Agrega tablero compacto para cargar muchas imagenes juntas, elegir portada, ordenar roles y renombrar archivos. La IA queda enfocada en descripcion corta y larga, y se corrige el aviso de actualizacion." \
+              --latest
+          fi
+
+          gh release upload v0.2.11 \
+            "release-assets/v0.2.11/ROXWANA Product Manager_0.2.11_x64-setup.exe" \
+            "release-assets/v0.2.11/ROXWANA Product Manager_0.2.11_x64-setup.exe.sig" \
+            "docs/updater/latest.json" \
+            --clobber

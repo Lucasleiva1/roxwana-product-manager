@@ -320,9 +320,10 @@ textarea:focus-visible {
 
 .update-dialog {
   display: grid;
-  width: min(520px, 92vw);
+  width: min(560px, 92vw);
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 14px;
+  align-items: start;
   padding: 22px;
   border: 1px solid rgba(217, 168, 102, 0.46);
   border-radius: 8px;
@@ -330,22 +331,49 @@ textarea:focus-visible {
   box-shadow: var(--shadow);
 }
 
+.update-dialog > svg {
+  margin-top: 3px;
+  color: var(--gold-light);
+}
+
+.update-dialog__content {
+  min-width: 0;
+}
+
+.update-dialog > span {
+  align-self: center;
+  min-width: 0;
+  color: #f1eadf;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .update-dialog h2 {
-  margin: 4px 0 6px;
-  font-size: 20px;
+  margin: 0 0 5px;
+  font-size: 16px;
+  line-height: 1.25;
 }
 
 .update-dialog p {
   margin: 0;
   color: var(--muted);
   font-size: 11px;
+  line-height: 1.45;
 }
 
 .update-dialog footer {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 9px;
+}
+
+.update-dialog footer .button {
+  width: auto;
+  min-width: 138px;
+  justify-content: center;
 }
 
 .sidebar {
@@ -5112,7 +5140,7 @@ textarea:focus-visible {
 .creator-left {
   display: grid;
   min-height: 0;
-  grid-template-rows: minmax(270px, 1.45fr) minmax(170px, 0.55fr);
+  grid-template-rows: minmax(330px, 1.55fr) minmax(150px, 0.45fr);
   gap: 12px;
   overflow: hidden;
 }
@@ -5250,6 +5278,30 @@ textarea:focus-visible {
   min-height: 0;
   height: auto;
   flex-direction: column;
+}
+
+.description-ai-card .creator-card__header {
+  min-height: 42px;
+}
+
+.description-ai-card .creator-chat {
+  padding: 12px 16px 8px;
+}
+
+.description-ai-card .chat-day {
+  margin-bottom: 10px;
+}
+
+.description-ai-card .creator-message {
+  margin-bottom: 9px;
+}
+
+.description-ai-card .composer-wrap {
+  padding: 8px 10px 10px;
+}
+
+.description-ai-card .creator-composer {
+  min-height: 42px;
 }
 
 .creator-chat {
@@ -5717,6 +5769,213 @@ textarea:focus-visible {
 
 .gallery-add span {
   font-size: 10px;
+}
+
+.image-board-card {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.image-board-title {
+  min-height: 50px;
+  padding: 10px 14px;
+}
+
+.image-board {
+  min-height: 0;
+  flex: 1;
+  padding: 10px;
+  overflow: hidden;
+}
+
+.image-board.is-empty {
+  display: grid;
+}
+
+.image-board-empty {
+  display: grid;
+  min-height: 210px;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  border: 1px dashed #3c4a52;
+  border-radius: 12px;
+  color: var(--muted);
+  background:
+    linear-gradient(135deg, rgba(217, 168, 102, 0.05), transparent 42%),
+    #0a0f12;
+}
+
+.image-board-empty strong {
+  color: #d8d0c5;
+  font-size: 13px;
+}
+
+.image-board-empty small {
+  max-width: 320px;
+  color: var(--muted-2);
+  font-size: 10px;
+  text-align: center;
+}
+
+.image-board-grid {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
+  gap: 9px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.image-board-item {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: 120px auto;
+  overflow: hidden;
+  border: 1px solid #2e3b42;
+  border-radius: 8px;
+  background: #0a0f12;
+}
+
+.image-board-item.is-cover {
+  border-color: rgba(217, 168, 102, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(217, 168, 102, 0.18);
+}
+
+.image-board-preview {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  place-items: center;
+  background: #f4f4f2;
+}
+
+.image-board-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.image-board-preview > span {
+  display: grid;
+  color: #51606a;
+}
+
+.image-board-preview strong,
+.image-board-preview em {
+  position: absolute;
+  left: 7px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: #f5eadc;
+  background: rgba(7, 10, 12, 0.82);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.image-board-preview strong {
+  top: 7px;
+}
+
+.image-board-preview em {
+  bottom: 7px;
+  color: #17110a;
+  background: var(--gold);
+  font-weight: 700;
+}
+
+.image-board-controls {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+}
+
+.image-board-controls button,
+.image-board-footer button {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #314049;
+  border-radius: 7px;
+  color: #d9d2c8;
+  background: #10171b;
+  font-size: 9px;
+}
+
+.image-board-controls button.active {
+  border-color: rgba(111, 175, 103, 0.5);
+  color: #d5f2d0;
+  background: rgba(111, 175, 103, 0.12);
+}
+
+.image-board-controls button:disabled {
+  opacity: 1;
+}
+
+.image-board-controls label {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.image-board-controls label > span {
+  color: var(--muted-2);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.image-board-controls select,
+.image-board-controls input {
+  width: 100%;
+  min-width: 0;
+  height: 27px;
+  border: 1px solid #2d3a42;
+  border-radius: 7px;
+  color: #e9e4d9;
+  background: #070b0d;
+  font-size: 10px;
+}
+
+.image-board-controls input {
+  padding: 0 7px;
+}
+
+.image-board-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 0.72fr 0.75fr 1fr;
+  gap: 5px;
+}
+
+.image-board-footer {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  gap: 6px;
+  align-items: center;
+}
+
+.image-board-footer small {
+  overflow: hidden;
+  color: var(--muted-2);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-board-footer button {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: #f3b0aa;
 }
 
 .print-work-mini-status {
@@ -6590,6 +6849,18 @@ textarea:focus-visible {
 
   .conversation-card {
     height: 650px;
+  }
+
+  .image-board-card {
+    min-height: 520px;
+  }
+
+  .image-board-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+
+  .description-ai-card {
+    height: 360px;
   }
 
   .conversation-card .composer-hint {

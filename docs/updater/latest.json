@@ -1,11 +1,11 @@
-{
-  "version": "0.2.10",
-  "notes": "El guardado local ya no se bloquea si Google Drive falla. Cuando el backup no sube, queda marcado como Drive pendiente con boton para reintentar despues.",
-  "pub_date": "2026-06-30T00:00:00Z",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUZHVDc2dYUlNUaFRYMmY2SU5GdXEzQnZ0OThSWmpOQjMyRjdqN0xGU2FZY2E2V3JOVnVtd0hONU9oaUVyNGd0aDRiS3FseVhvb0xxa0hHRVFpNEdXKzFxRVVxVEllQXdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODUwMzkzCWZpbGU6Uk9YV0FOQSBQcm9kdWN0IE1hbmFnZXJfMC4yLjEwX3g2NC1zZXR1cC5leGUKSENzTm5laC9JMFh6bGRiYXlCeWpzajhPV1FPNU9CMHRWV005ZUpGY1lma0ZQdWJCbE1zT0MzVjJWWXJIY0l3Y081YWpLU2Q3ZmxqcncrbFZCTUJSQ2c9PQo=",
-      "url": "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.10/ROXWANA.Product.Manager_0.2.10_x64-setup.exe"
-    }
-  }
+﻿{
+    "version":  "0.2.11",
+    "notes":  "Agrega tablero compacto para cargar muchas imagenes juntas, elegir portada, ordenar roles y renombrar archivos. La IA queda enfocada en descripcion corta y larga, y se corrige el aviso de actualizacion.",
+    "pub_date":  "2026-06-30T00:00:00Z",
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUZHVDc2dYUlNUaFljak5hZEZNZ0RtRkNEZFZFMnY0OWtHOEdsQTR1dG1TelMyaGFTODRHMktMbXlqMDU0UXF1S0VoSXZhSHg0MDU3VVkvY2QzK1JxRDExaEJoQUk1RndVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODUyNzIwCWZpbGU6Uk9YV0FOQSBQcm9kdWN0IE1hbmFnZXJfMC4yLjExX3g2NC1zZXR1cC5leGUKVUtxeGtjaDBqei9vZDdKZTZ2TlI1bU80QUF4ZGIxL1RGdTcrNjlmZzlSejJlMmNCTUtEUHZJMUVhTDVqQy91SUpwZm5EUlFaRyt5a3NlZE1UT0IzREE9PQo=",
+                                             "url":  "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.11/ROXWANA.Product.Manager_0.2.11_x64-setup.exe"
+                                         }
+                  }
 }

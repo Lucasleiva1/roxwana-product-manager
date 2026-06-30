@@ -1,0 +1,11 @@
+﻿{
+    "version":  "0.2.11",
+    "notes":  "Agrega tablero compacto para cargar muchas imagenes juntas, elegir portada, ordenar roles y renombrar archivos. La IA queda enfocada en descripcion corta y larga, y se corrige el aviso de actualizacion.",
+    "pub_date":  "2026-06-30T00:00:00Z",
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUZHVDc2dYUlNUaFljak5hZEZNZ0RtRkNEZFZFMnY0OWtHOEdsQTR1dG1TelMyaGFTODRHMktMbXlqMDU0UXF1S0VoSXZhSHg0MDU3VVkvY2QzK1JxRDExaEJoQUk1RndVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODUyNzIwCWZpbGU6Uk9YV0FOQSBQcm9kdWN0IE1hbmFnZXJfMC4yLjExX3g2NC1zZXR1cC5leGUKVUtxeGtjaDBqei9vZDdKZTZ2TlI1bU80QUF4ZGIxL1RGdTcrNjlmZzlSejJlMmNCTUtEUHZJMUVhTDVqQy91SUpwZm5EUlFaRyt5a3NlZE1UT0IzREE9PQo=",
+                                             "url":  "https://github.com/Lucasleiva1/roxwana-product-manager/releases/download/v0.2.11/ROXWANA.Product.Manager_0.2.11_x64-setup.exe"
+                                         }
+                  }
+}

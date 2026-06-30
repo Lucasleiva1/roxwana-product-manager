@@ -35,6 +35,7 @@ import {
   SIZE_CODES,
   TECHNIQUES,
   type ColorCode,
+  type ImageRole,
   type ProductDraft,
   type ProductImage,
   type ProductVariant,
@@ -104,6 +105,17 @@ interface PrintWorkFile {
   size: number;
   savedPath?: string;
 }
+
+const IMAGE_ROLE_OPTIONS: ImageRole[] = [
+  "portada",
+  "espalda remera",
+  "hover",
+  "costado",
+  "espalda modelo",
+  "detalle",
+];
+
+const IMAGE_DEVICE_OPTIONS: ProductImage["device"][] = ["desktop", "mobile", "base"];
 
 function friendlyErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error) return error.message;
@@ -226,11 +238,11 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     selectedTone,
     folderPath,
     patchDraft,
-    applyExtractedBrief,
     setColors,
     setSizes,
     setVariantStock,
     addImage,
+    replaceImages,
     patchImage,
     removeImage,
     addMessage,
@@ -317,6 +329,10 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   );
   const mainImage =
     draft.images.find((image) => image.imageNumber === 1) ?? draft.images[0] ?? null;
+  const sortedImages = useMemo(
+    () => [...draft.images].sort((left, right) => left.imageNumber - right.imageNumber),
+    [draft.images],
+  );
   const showCreatorActionLabels = settings.creatorActionLabels;
   const productAlreadySaved = knownProductIds.includes(draft.id);
 
@@ -465,6 +481,69 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         notify(`No pude guardar ${file.name}`);
       }
     }
+  };
+
+  const filenameForImage = (image: ProductImage, patch: Partial<ProductImage> = {}) =>
+    imageFilename(
+      patch.colorCode ?? image.colorCode,
+      patch.imageNumber ?? image.imageNumber,
+      patch.device ?? image.device,
+    );
+
+  const updateBoardImage = (
+    image: ProductImage,
+    patch: Partial<ProductImage>,
+    recomputeFilename = true,
+  ) => {
+    patchImage(image.id, {
+      ...patch,
+      finalFilename:
+        patch.finalFilename ?? (recomputeFilename ? filenameForImage(image, patch) : image.finalFilename),
+    });
+  };
+
+  const normalizeImageOrder = (images: ProductImage[]) =>
+    images.map((image, index) => {
+      const imageNumber = index + 1;
+      const previousAutomaticFilename = imageFilename(
+        image.colorCode,
+        image.imageNumber,
+        image.device,
+      );
+      const nextAutomaticFilename = imageFilename(image.colorCode, imageNumber, image.device);
+      const role =
+        index === 0
+          ? "portada"
+          : image.role === "portada"
+            ? roleForImageNumber(imageNumber)
+            : image.role;
+      return {
+        ...image,
+        imageNumber,
+        role,
+        finalFilename:
+          image.finalFilename === previousAutomaticFilename ? nextAutomaticFilename : image.finalFilename,
+      };
+    });
+
+  const setCoverImage = (imageId: string) => {
+    const currentImages = [...useProductStore.getState().draft.images].sort(
+      (left, right) => left.imageNumber - right.imageNumber,
+    );
+    const selected = currentImages.find((image) => image.id === imageId);
+    if (!selected) return;
+    replaceImages(normalizeImageOrder([selected, ...currentImages.filter((image) => image.id !== imageId)]));
+  };
+
+  const moveImageToNumber = (imageId: string, imageNumber: number) => {
+    const currentImages = [...useProductStore.getState().draft.images].sort(
+      (left, right) => left.imageNumber - right.imageNumber,
+    );
+    const selected = currentImages.find((image) => image.id === imageId);
+    if (!selected) return;
+    const next = currentImages.filter((image) => image.id !== imageId);
+    next.splice(Math.max(0, imageNumber - 1), 0, selected);
+    replaceImages(normalizeImageOrder(next));
   };
 
   const fileAsDataUrl = (file: File) =>
@@ -666,8 +745,17 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
   const handleGalleryImages = async (files: FileList | null) => {
     if (!files?.length) return;
+    let added = 0;
     for (const file of Array.from(files)) {
-      if (file.type.startsWith("image/")) await addProductImage(file);
+      if (file.type.startsWith("image/")) {
+        await addProductImage(file);
+        added += 1;
+      }
+    }
+    if (added > 0) {
+      notify(`${added} imagen${added === 1 ? "" : "es"} cargada${added === 1 ? "" : "s"}.`);
+    } else {
+      notify("No encontre imagenes en esos archivos.");
     }
   };
 
@@ -767,20 +855,15 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         },
         images,
       );
-      const nextGarment = result.data.garmentType ?? draft.garmentType;
-      const systemPrefix =
-        (result.data.modelPrefix ?? draft.modelPrefix) || (nextGarment ? "RCK" : "");
-      const needsSkuAssignment =
-        Boolean(nextGarment && systemPrefix) &&
-        (draft.modelNumber <= 0 ||
-          draft.garmentType !== nextGarment ||
-          draft.modelPrefix !== systemPrefix);
-      const systemModelNumber = needsSkuAssignment
-        ? await suggestNextModel(systemPrefix, nextGarment)
-        : draft.modelNumber;
-      applyExtractedBrief({ ...result.data, modelPrefix: systemPrefix || undefined });
-      if (systemModelNumber > 0) patchDraft({ modelNumber: systemModelNumber });
-      setTone(toneFromInstruction(clean));
+      const descriptionPatch: Partial<ProductDraft> = {};
+      if (result.data.shortDescription?.trim()) {
+        descriptionPatch.shortDescription = result.data.shortDescription.trim();
+      }
+      if (result.data.longDescription?.trim()) {
+        descriptionPatch.longDescription = result.data.longDescription.trim();
+      }
+      if (Object.keys(descriptionPatch).length) patchDraft(descriptionPatch);
+      setTone(toneFromInstruction(clean || result.reply));
       addMessage({
         role: "assistant",
         content: result.reply,
@@ -1229,16 +1312,229 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
       <header className="creator-header">
         <h1>Crear producto</h1>
-        <p>Conversá a la izquierda y revisá la ficha a la derecha.</p>
+        <p>Carga imagenes en el tablero y revisa la ficha a la derecha.</p>
       </header>
 
       <div className="creator-layout">
         <div className="creator-left">
-          <section className="creator-card conversation-card">
+          <section className="creator-card image-board-card">
+            <div className="section-title image-board-title">
+              <div>
+                <ImagePlus size={18} />
+                <span>
+                  <strong>Tablero de imagenes</strong>
+                  <small>Arrastra varias imagenes juntas y elegi portada, rol y nombre.</small>
+                </span>
+              </div>
+              <div className={`gallery-header-actions ${showCreatorActionLabels ? "" : "is-icon-only"}`}>
+                <button
+                  type="button"
+                  onClick={() => setGalleryExpanded(true)}
+                  title="Administrar imagenes"
+                  aria-label="Administrar imagenes"
+                >
+                  <Maximize2 size={15} />
+                  {showCreatorActionLabels && <span>Administrar</span>}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => galleryInput.current?.click()}
+                  title="Agregar imagenes"
+                  aria-label="Agregar imagenes"
+                >
+                  <UploadCloud size={15} />
+                  {showCreatorActionLabels && <span>Agregar imagenes</span>}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => printWorkInput.current?.click()}
+                  title="Trabajos para impresion"
+                  aria-label="Trabajos para impresion"
+                >
+                  <File size={15} />
+                  {showCreatorActionLabels && <span>Trabajos para impresion</span>}
+                </button>
+                {printWorkFiles.length > 0 && (
+                  <span className="print-work-mini-status">
+                    <File size={12} />
+                    {printWorkFiles.length} impresion
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div
+              className={`image-board ${sortedImages.length ? "" : "is-empty"}`}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                void handleGalleryImages(event.dataTransfer.files);
+              }}
+            >
+              {sortedImages.length ? (
+                <div className="image-board-grid">
+                  {sortedImages.map((image) => (
+                    <article
+                      className={`image-board-item ${image.imageNumber === 1 ? "is-cover" : ""}`}
+                      key={image.id}
+                    >
+                      <div className="image-board-preview">
+                        {image.previewUrl ? (
+                          <img src={image.previewUrl} alt={image.role} />
+                        ) : (
+                          <span>
+                            <ImagePlus size={24} />
+                          </span>
+                        )}
+                        <strong>{String(image.imageNumber).padStart(2, "0")}</strong>
+                        {image.imageNumber === 1 && <em>Portada</em>}
+                      </div>
+
+                      <div className="image-board-controls">
+                        <button
+                          type="button"
+                          className={image.imageNumber === 1 ? "active" : ""}
+                          onClick={() => setCoverImage(image.id)}
+                          disabled={image.imageNumber === 1}
+                        >
+                          <Check size={13} />
+                          {image.imageNumber === 1 ? "Portada" : "Usar portada"}
+                        </button>
+
+                        <label>
+                          <span>Rol</span>
+                          <select
+                            value={image.role}
+                            onChange={(event) => {
+                              const role = event.target.value as ImageRole;
+                              if (role === "portada") setCoverImage(image.id);
+                              else updateBoardImage(image, { role }, false);
+                            }}
+                          >
+                            {IMAGE_ROLE_OPTIONS.map((role) => (
+                              <option key={role} value={role}>
+                                {role}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <div className="image-board-row">
+                          <label>
+                            <span>Orden</span>
+                            <select
+                              value={image.imageNumber}
+                              onChange={(event) =>
+                                moveImageToNumber(image.id, Number(event.target.value))
+                              }
+                            >
+                              {sortedImages.map((_, index) => (
+                                <option key={index + 1} value={index + 1}>
+                                  {String(index + 1).padStart(2, "0")}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label>
+                            <span>Color</span>
+                            <select
+                              value={image.colorCode}
+                              onChange={(event) =>
+                                updateBoardImage(image, {
+                                  colorCode: event.target.value as ColorCode,
+                                })
+                              }
+                            >
+                              {(Object.keys(COLOR_CATALOG) as ColorCode[]).map((color) => (
+                                <option key={color} value={color}>
+                                  {color}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label>
+                            <span>Vista</span>
+                            <select
+                              value={image.device}
+                              onChange={(event) =>
+                                updateBoardImage(image, {
+                                  device: event.target.value as ProductImage["device"],
+                                })
+                              }
+                            >
+                              {IMAGE_DEVICE_OPTIONS.map((device) => (
+                                <option key={device} value={device}>
+                                  {device}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+
+                        <label>
+                          <span>Archivo final</span>
+                          <input
+                            value={image.finalFilename}
+                            onChange={(event) =>
+                              updateBoardImage(image, { finalFilename: event.target.value }, false)
+                            }
+                          />
+                        </label>
+
+                        <div className="image-board-footer">
+                          <small title={image.originalName}>{image.originalName}</small>
+                          <button type="button" onClick={() => removeImage(image.id)}>
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="image-board-empty"
+                  onClick={() => galleryInput.current?.click()}
+                >
+                  <UploadCloud size={28} />
+                  <strong>Solta aca todas las imagenes del producto</strong>
+                  <small>La primera que entre queda como portada. Despues podes cambiarla.</small>
+                </button>
+              )}
+            </div>
+
+            <input
+              ref={galleryInput}
+              hidden
+              multiple
+              type="file"
+              accept="image/*"
+              onChange={(event) => {
+                void handleGalleryImages(event.target.files);
+                event.currentTarget.value = "";
+              }}
+            />
+            <input
+              ref={printWorkInput}
+              hidden
+              multiple
+              type="file"
+              accept=".ai,.psd,.psb,.png,.pdf,.eps,.svg,.tif,.tiff,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp,application/pdf"
+              onChange={(event) => {
+                void handlePrintWorkFiles(event.target.files);
+                event.currentTarget.value = "";
+              }}
+            />
+          </section>
+
+          <section className="creator-card conversation-card description-ai-card">
             <div className="creator-card__header">
               <div>
                 <span className={`live-orb live-orb--${ollamaState}`} />
-                <strong>Asistente ROXWANA</strong>
+                <strong>IA de descripciones</strong>
               </div>
               <span
                 className={`assistant-runtime assistant-runtime--${ollamaState}`}
@@ -1344,7 +1640,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                       ? "Te estoy escuchando..."
                       : transcribing
                         ? "Transcribiendo con Whisper..."
-                        : "Describí el producto, adjuntá una imagen o hablame..."
+                        : "Pedime una descripcion corta o larga para este producto..."
                   }
                   rows={1}
                 />
@@ -1384,11 +1680,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 }}
               />
               <small className="composer-hint">
-                Enter para enviar - Shift + Enter para nueva línea - la IA puede cometer errores
+                Enter para enviar - trabaja sobre descripcion corta y larga
               </small>
             </div>
           </section>
 
+          {false && (
           <section className="creator-card gallery-card">
             <div className="section-title">
               <div>
@@ -1498,6 +1795,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               }}
             />
           </section>
+          )}
         </div>
 
         <aside className="creator-right">

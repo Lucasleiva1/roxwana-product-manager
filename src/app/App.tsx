@@ -563,6 +563,7 @@ function App() {
               {startupInstall ? ` · ${startupInstall.message}` : ""}
               {startupInstall && typeof startupInstall.progress === "number" ? ` ${startupInstall.progress}%` : ""}
             </span>
+            <footer>
             <Button size="sm" variant="primary" onClick={() => void installUpdate(startupUpdate)} loading={startupUpdateBusy}>
               Actualizar ahora
             </Button>
@@ -576,6 +577,7 @@ function App() {
             >
               Mas tarde
             </Button>
+            </footer>
             </section>
           </div>
         )}

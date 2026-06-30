@@ -121,6 +121,7 @@ interface ProductState {
   setSizes: (sizes: SizeCode[]) => void;
   setVariantStock: (sku: string, stock: number) => void;
   addImage: (image: ProductImage) => void;
+  replaceImages: (images: ProductImage[]) => void;
   patchImage: (id: string, patch: Partial<ProductImage>) => void;
   removeImage: (id: string) => void;
   regenerateDescriptions: (tone?: "rockera" | "comercial" | "minimal") => void;
@@ -243,6 +244,12 @@ export const useProductStore = create<ProductState>((set, get) => ({
   addImage: (image) =>
     set((state) => {
       const draft = { ...state.draft, images: [...state.draft.images, image] };
+      persistDraft(draft);
+      return { draft };
+    }),
+  replaceImages: (images) =>
+    set((state) => {
+      const draft = { ...state.draft, images, updatedAt: new Date().toISOString() };
       persistDraft(draft);
       return { draft };
     }),
