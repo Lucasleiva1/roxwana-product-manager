@@ -11,6 +11,17 @@ No publicar una actualizacion solo porque se hicieron cambios. Primero confirmar
 publicar o subir la version. A veces se hacen varios cambios seguidos y conviene probar antes de
 generar un Release.
 
+Antes de decir que una version esta lista, distinguir tres estados:
+
+1. El codigo esta corregido localmente.
+2. El instalador firmado esta generado.
+3. La app instalada ya puede ver la version nueva en GitHub.
+
+Solo el punto 3 significa que el usuario puede actualizar desde la app. Si
+`https://github.com/Lucasleiva1/roxwana-product-manager/releases/latest/download/latest.json`
+sigue devolviendo la version anterior, la app instalada no va a encontrar la actualizacion aunque el
+codigo, el tag o el instalador existan localmente.
+
 Cuando el usuario pide publicar, el resultado esperado es:
 
 1. Commit en `main`.
@@ -176,6 +187,8 @@ Puntos importantes:
 - La API directa funciono usando las credenciales ya guardadas por Git.
 - El Release debe quedar como ultimo Release, no draft y no prerelease.
 - Se deben subir exactamente tres assets: `.exe`, `.exe.sig` y `latest.json`.
+- Despues de publicar, validar siempre la URL publica del updater. No alcanza con ver que el tag
+  exista o que `main` haya sido empujado.
 
 Detalle critico que resolvio el problema:
 
@@ -257,6 +270,73 @@ sig asset status: 200
 Si `latest.json` responde `200`, la version es la esperada, la firma tiene contenido y el instalador
 responde `200`, la app instalada ya puede detectar la actualizacion.
 
+## Problemas reales encontrados en 0.2.9 y 0.2.10
+
+### La app no encontraba la version nueva
+
+Sintoma: la app instalada decia que no habia actualizacion aunque localmente ya existia el
+instalador firmado.
+
+Causa: el endpoint publico `releases/latest/download/latest.json` seguia devolviendo `0.2.8`. Se
+habian creado commit, tag e instalador, pero faltaba publicar el Release con los tres assets
+obligatorios.
+
+Correccion: publicar el Release y validar:
+
+```txt
+latest.json status: 200
+version: 0.2.9 o superior
+signature length: 440
+installer status: 200
+sig asset status: 200
+```
+
+### GitHub CLI no estaba autenticado
+
+Sintoma: `gh release ...` fallaba con mensaje de login.
+
+Correccion preferida: usar el metodo API documentado o iniciar `gh auth login` solo si el usuario lo
+autoriza. Como alternativa de emergencia, se puede subir un workflow versionado de GitHub Actions
+que publique el Release con `GITHUB_TOKEN`, pero ese workflow debe ser especifico de esa version y
+no debe quedar apuntando a versiones viejas.
+
+Si se usa el workflow de emergencia:
+
+1. Copiar el instalador firmado y su `.sig` a `release-assets/vX.Y.Z/`.
+2. Crear `.github/workflows/publish-vX.Y.Z.yml`.
+3. Hacer commit y push.
+4. Esperar que Actions termine en `success`.
+5. Validar `latest.json` publico.
+6. En una version posterior, borrar el workflow viejo para que no vuelva a tocar un Release anterior.
+
+### Guardar producto fallaba por Drive
+
+Sintoma: al guardar una ficha con imagenes y variantes, la UI mostraba "No pude guardar el producto".
+
+Causa: el guardado local terminaba, pero despues se ejecutaba backup automatico a Google Drive. Si
+Drive estaba pausado, sincronizando, no disponible o con archivos bloqueados, ese error subia como si
+hubiera fallado el guardado del producto.
+
+Regla corregida desde `0.2.10`: el backup automatico no puede bloquear el guardado local. El producto
+queda guardado en la base y carpeta local; si Drive falla, la app debe mostrar "Drive pendiente" y
+ofrecer un boton para subir el backup despues.
+
+### Perdida de trabajo durante una falla
+
+Sintoma: si el flujo fallaba, el usuario podia perder una ficha en carga.
+
+Correccion desde `0.2.10`: el borrador actual se persiste en `localStorage` mientras se trabaja. El
+borrador se limpia solo cuando se descarta o se guarda correctamente.
+
+## Reglas reforzadas para guardar y backup
+
+- Guardar producto local, imagenes, codigos y base debe ser prioridad absoluta.
+- Drive es una copia secundaria; no debe impedir que el usuario guarde.
+- Si Drive falla, mostrar estado pendiente y permitir reintento manual.
+- No resetear el borrador si el guardado real falla.
+- No mostrar mensajes genericos cuando Tauri devuelve un error concreto.
+- Nunca decir "actualizacion publicada" hasta validar `latest.json`, instalador y firma por HTTP.
+
 ## Que no hacer
 
 - No subir solo el `.exe`: sin `latest.json` la app no detecta nada.
@@ -268,4 +348,3 @@ responde `200`, la app instalada ya puede detectar la actualizacion.
   podrian verificar firmas hechas con otra clave.
 - No guardar datos de usuario dentro del bundle de la app. El updater reemplaza la app, no debe tocar
   la base local, imagenes, carpetas de productos ni backups.
-

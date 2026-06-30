@@ -126,6 +126,30 @@ Incorrecto:
 https://github.com/Lucasleiva1/roxwana-product-manager/releases/latest/download/latest.json
 ```
 
+Validacion minima antes de avisar al usuario:
+
+```txt
+latest.json status: 200
+version: X.Y.Z
+signature length: 440
+installer status: 200
+sig asset status: 200
+```
+
+Si esa validacion no pasa, la app instalada todavia no puede encontrar la version nueva.
+
+## Guardado local y backup a Drive
+
+Desde `0.2.10`, el guardado local y el backup a Drive quedan separados.
+
+- Guardar producto, carpeta, imagenes, codigos y base local no debe depender de Google Drive.
+- Si Drive falla, la app debe guardar igual y dejar el estado `Drive pendiente`.
+- El usuario puede reintentar con el boton `Subir a Drive` cuando Drive vuelva a estar disponible.
+- Una falla de Drive puede pasar por sincronizacion en curso, archivos bloqueados, Drive pausado,
+  falta de red, carpeta no montada o demora de Windows/Drive para liberar archivos recien escritos.
+
+No volver a cambiar esto para que el backup automatico tire abajo el guardado principal.
+
 ## Nombre real de los assets en GitHub
 
 GitHub puede mostrar o servir assets con espacios reemplazados por puntos. Por eso, aunque el archivo
