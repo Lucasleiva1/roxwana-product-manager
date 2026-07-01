@@ -35,6 +35,12 @@ export interface ProductPackageImage {
   webpDataUrl?: string;
 }
 
+export interface ProductPackageImageResult {
+  id: string;
+  originalPath: string;
+  finalPath: string;
+}
+
 export interface ProductPackageBarcode {
   sku: string;
   svg: string;
@@ -67,6 +73,10 @@ export interface FolderSaveResult {
   backupError?: string | null;
 }
 
+export interface ProductPackageSaveResult extends FolderSaveResult {
+  images?: ProductPackageImageResult[];
+}
+
 function readLocalProducts(): ProductDraft[] {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]") as ProductDraft[];
@@ -86,7 +96,7 @@ async function invokeSaveProduct(product: ProductDraft) {
 }
 
 async function invokeSaveProductPackage(payload: ProductPackagePayload) {
-  const result = await invoke<FolderSaveResult>("save_product_package", {
+  const result = await invoke<ProductPackageSaveResult>("save_product_package", {
     payload: { ...payload, product: packageProduct(payload.product) },
   });
   desktopInvokeAvailable = true;
@@ -288,7 +298,7 @@ async function postDevProductPackage(payload: ProductPackagePayload) {
     const text = await response.text();
     throw new Error(text || "No pude crear el paquete del producto.");
   }
-  return response.json() as Promise<FolderSaveResult>;
+  return response.json() as Promise<ProductPackageSaveResult>;
 }
 
 export async function saveProductPackage(payload: ProductPackagePayload) {

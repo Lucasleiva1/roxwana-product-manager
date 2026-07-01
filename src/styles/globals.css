@@ -1425,6 +1425,7 @@ textarea:focus-visible {
 .settings-fields select,
 .description-grid textarea,
 .image-quick-editor select,
+.managed-image input,
 .managed-image select,
 .description-editors textarea,
 .instruction-editor {
@@ -1442,6 +1443,7 @@ textarea:focus-visible {
 .settings-fields input,
 .settings-fields select,
 .image-quick-editor select,
+.managed-image input,
 .managed-image select {
   height: 30px;
   padding: 0 8px;
@@ -3783,7 +3785,8 @@ textarea:focus-visible {
 .managed-image__preview img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  background: #f4f4f2;
 }
 
 .managed-image__preview > span {
@@ -5003,16 +5006,16 @@ textarea:focus-visible {
 
 .creator-header {
   display: flex;
-  min-height: 48px;
+  min-height: 34px;
   align-items: baseline;
-  gap: 16px;
-  margin-bottom: 8px;
+  gap: 12px;
+  margin-bottom: 5px;
 }
 
 .creator-header h1 {
   margin: 0;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: clamp(25px, 2.4vw, 32px);
+  font-size: clamp(21px, 2vw, 27px);
   font-weight: 500;
   letter-spacing: -0.03em;
 }
@@ -5020,7 +5023,7 @@ textarea:focus-visible {
 .creator-header p {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .creator-kicker {
@@ -5140,8 +5143,11 @@ textarea:focus-visible {
 .creator-left {
   display: grid;
   min-height: 0;
-  grid-template-rows: minmax(330px, 1.55fr) minmax(150px, 0.45fr);
-  gap: 12px;
+  grid-template-rows:
+    minmax(280px, var(--board-panel-size, 72fr))
+    10px
+    minmax(145px, var(--ai-panel-size, 28fr));
+  gap: 0;
   overflow: hidden;
 }
 
@@ -5163,6 +5169,35 @@ textarea:focus-visible {
 .creator-left,
 .creator-right {
   min-width: 0;
+}
+
+.creator-panel-resizer {
+  display: grid;
+  height: 10px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  cursor: row-resize;
+  background: transparent;
+}
+
+.creator-panel-resizer span {
+  display: block;
+  width: 76px;
+  height: 3px;
+  border-radius: 999px;
+  background: #354149;
+  box-shadow: 0 0 0 1px rgba(217, 168, 102, 0.04);
+}
+
+.creator-panel-resizer:hover span,
+.is-resizing-panels .creator-panel-resizer span {
+  background: var(--gold);
+}
+
+.is-resizing-panels {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .creator-card {
@@ -5778,8 +5813,8 @@ textarea:focus-visible {
 }
 
 .image-board-title {
-  min-height: 50px;
-  padding: 10px 14px;
+  min-height: 34px;
+  padding: 4px 9px;
 }
 
 .image-board {
@@ -5978,6 +6013,203 @@ textarea:focus-visible {
   color: #f3b0aa;
 }
 
+.image-board-title {
+  gap: 6px;
+}
+
+.image-board-title small {
+  display: none;
+}
+
+.image-board-title .gallery-header-actions,
+.image-manager-modal > header > div:last-child {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.image-board-title > div:first-child {
+  min-width: 0;
+}
+
+.image-board-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 4px;
+  border: 1px solid #2f3c44;
+  border-radius: 8px;
+  background: #0a0f12;
+}
+
+.image-board-zoom button {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #d8c49e;
+  background: transparent;
+}
+
+.image-board-zoom button:hover {
+  color: #16100a;
+  background: var(--gold);
+}
+
+.image-board-zoom small {
+  min-width: 31px;
+  color: var(--muted);
+  font-size: 9px;
+  text-align: center;
+}
+
+.image-board {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+
+.image-board-canvas {
+  display: grid;
+  min-width: 100%;
+  grid-template-columns: repeat(auto-fill, minmax(var(--image-board-card-width, 190px), var(--image-board-card-width, 190px)));
+  gap: 8px;
+  align-content: start;
+  justify-content: start;
+  padding: 2px 2px 48px;
+}
+
+.image-board-tile {
+  display: grid;
+  width: var(--image-board-card-width, 190px);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #2e3b42;
+  border-radius: 8px;
+  background: #0a0f12;
+}
+
+.image-board-tile.is-cover {
+  border-color: rgba(217, 168, 102, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(217, 168, 102, 0.18), 0 0 0 1px rgba(217, 168, 102, 0.12);
+}
+
+.image-board-tile .image-board-preview {
+  height: var(--image-board-preview-height, 158px);
+}
+
+.image-board-tile .image-board-controls {
+  gap: 5px;
+  padding: 6px;
+}
+
+.image-board-controls select:disabled {
+  color: #d8c49e;
+  opacity: 1;
+  background: rgba(217, 168, 102, 0.08);
+}
+
+.image-cover-chip,
+.image-delete-chip {
+  position: absolute;
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid rgba(12, 17, 20, 0.72);
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  backdrop-filter: blur(4px);
+}
+
+.image-cover-chip {
+  left: 7px;
+  bottom: 7px;
+  padding: 0 7px;
+  color: #17110a;
+  background: var(--gold);
+}
+
+.image-cover-chip:not(.active) {
+  color: #efe7d8;
+  background: rgba(10, 15, 18, 0.82);
+}
+
+.image-cover-chip.active,
+.image-cover-chip:disabled {
+  opacity: 1;
+}
+
+.image-delete-chip {
+  right: 7px;
+  top: 7px;
+  width: 24px;
+  padding: 0;
+  color: #ffd0cc;
+  background: rgba(10, 15, 18, 0.82);
+}
+
+.image-board-tile .image-board-preview strong {
+  top: 7px;
+  left: 7px;
+}
+
+.image-board-tile .image-board-controls label {
+  gap: 2px;
+}
+
+.image-board-tile .image-board-controls label > span {
+  font-size: 7px;
+}
+
+.image-board-tile .image-board-controls select {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 9px;
+}
+
+.image-color-swatches {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.image-color-swatches button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  place-items: center;
+  padding: 2px;
+  border: 1px solid #3b474e;
+  border-radius: 6px;
+  background: #0b1114;
+}
+
+.image-color-swatches button.active {
+  border-color: var(--gold);
+  background: #0b1114;
+  box-shadow: 0 0 0 2px rgba(217, 168, 102, 0.12);
+}
+
+.image-color-swatches i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.image-board-filename {
+  display: none;
+}
+
 .print-work-mini-status {
   display: inline-flex;
   min-height: 22px;
@@ -6066,8 +6298,59 @@ textarea:focus-visible {
 .image-manager--embedded {
   min-height: 0;
   flex: 1;
-  overflow-y: auto;
+  grid-template-columns: repeat(auto-fill, minmax(var(--image-board-card-width, 220px), var(--image-board-card-width, 220px)));
+  align-content: start;
+  justify-content: start;
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 16px;
+  scrollbar-gutter: stable both-edges;
+}
+
+.image-manager--embedded .managed-image {
+  display: flex;
+  width: var(--image-board-card-width, 220px);
+  min-height: 0;
+  overflow: visible;
+  flex-direction: column;
+}
+
+.image-manager--embedded .managed-image__preview {
+  flex: 0 0 auto;
+  aspect-ratio: auto;
+  height: var(--image-board-preview-height, 184px);
+}
+
+.image-manager--embedded .managed-image__body {
+  flex: 0 0 auto;
+  padding: 9px;
+}
+
+.image-manager--embedded .managed-image .field-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.managed-cover-button {
+  display: inline-flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  border: 1px solid #354149;
+  border-radius: 7px;
+  color: #e8dccb;
+  background: #0b1114;
+  font-size: 10px;
+}
+
+.managed-cover-button.active,
+.managed-cover-button:disabled {
+  border-color: rgba(217, 168, 102, 0.72);
+  color: #16100a;
+  background: var(--gold);
+  opacity: 1;
 }
 
 .image-manager-modal > footer {
@@ -6838,7 +7121,7 @@ textarea:focus-visible {
   }
 
   .creator-left {
-    grid-template-rows: auto auto;
+    grid-template-rows: minmax(520px, auto) 10px minmax(300px, auto);
     overflow: visible;
   }
 
@@ -6855,8 +7138,8 @@ textarea:focus-visible {
     min-height: 520px;
   }
 
-  .image-board-grid {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  .image-board-canvas {
+    grid-template-columns: repeat(auto-fill, minmax(var(--image-board-card-width, 170px), var(--image-board-card-width, 170px)));
   }
 
   .description-ai-card {

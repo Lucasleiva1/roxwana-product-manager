@@ -48,6 +48,7 @@ export type ProductStatus = (typeof PRODUCT_STATUSES)[number];
 
 export type ImageRole =
   | "portada"
+  | "frente"
   | "espalda remera"
   | "hover"
   | "costado"

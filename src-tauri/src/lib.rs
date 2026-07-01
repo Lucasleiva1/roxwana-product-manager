@@ -26,6 +26,8 @@ struct DatabaseInfo {
 struct FolderResult {
     folder_path: String,
     backup_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<PackageImageFileResult>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,6 +46,14 @@ struct BarcodeResult {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ImageFileResult {
+    original_path: String,
+    final_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageImageFileResult {
+    id: String,
     original_path: String,
     final_path: String,
 }
@@ -120,6 +130,8 @@ struct ImageInput {
     role: String,
     original_name: String,
     final_filename: String,
+    original_path: Option<String>,
+    final_path: Option<String>,
     approved: bool,
 }
 
@@ -1395,12 +1407,17 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
         )
         .map_err(|error| error.to_string())?;
     for image in input.images {
+        let original_path = image
+            .original_path
+            .clone()
+            .unwrap_or_else(|| image.original_name.clone());
+        let final_path = image.final_path.clone().unwrap_or_default();
         transaction
             .execute(
                 "INSERT INTO product_images (
                     id, product_id, color_code, image_number, device, role, original_path,
                     final_filename, final_path, is_approved, created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, ?10, ?10)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
                 params![
                     image.id,
                     input.id,
@@ -1408,8 +1425,9 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
                     image.image_number,
                     image.device,
                     image.role,
-                    image.original_name,
+                    original_path,
                     image.final_filename,
+                    final_path,
                     image.approved as i64,
                     input.updated_at,
                 ],
@@ -1422,6 +1440,7 @@ fn save_product(app: AppHandle, product: Value) -> Result<FolderResult, String> 
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
         backup_error,
+        images: None,
     })
 }
 
@@ -1565,6 +1584,7 @@ fn create_product_folder(
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
         backup_error: None,
+        images: None,
     })
 }
 
@@ -1653,6 +1673,7 @@ fn product_package_folder(app: AppHandle, model_code: String) -> Result<FolderRe
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
         backup_error: None,
+        images: None,
     })
 }
 
@@ -1664,6 +1685,7 @@ fn open_product_package_folder(app: AppHandle, model_code: String) -> Result<Fol
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
         backup_error: None,
+        images: None,
     })
 }
 
@@ -1721,6 +1743,7 @@ fn save_product_package(
             .map_err(|error| error.to_string())?;
     }
 
+    let mut saved_images: Vec<PackageImageFileResult> = Vec::new();
     for image in payload.images {
         let original_name = safe_file_name(&image.original_name, &format!("{}-original", image.id));
         let final_name = safe_file_name(&image.final_filename, &format!("{}.webp", image.id));
@@ -1747,10 +1770,18 @@ fn save_product_package(
             }
         }
 
+        if webp_path.exists() {
+            saved_images.push(PackageImageFileResult {
+                id: image.id.clone(),
+                original_path: original_path.to_string_lossy().to_string(),
+                final_path: webp_path.to_string_lossy().to_string(),
+            });
+        }
+
         if image.approved && webp_path.exists() {
             fs::copy(
                 &webp_path,
-                folder.join("imagenes/aprobadas").join(final_name),
+                folder.join("imagenes/aprobadas").join(&final_name),
             )
             .map_err(|error| error.to_string())?;
         }
@@ -1793,6 +1824,7 @@ fn save_product_package(
     Ok(FolderResult {
         folder_path: folder.to_string_lossy().to_string(),
         backup_error: None,
+        images: Some(saved_images),
     })
 }
 
@@ -1834,6 +1866,7 @@ fn save_print_files(
             .to_string_lossy()
             .to_string(),
         backup_error: None,
+        images: None,
     })
 }
 

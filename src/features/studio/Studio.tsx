@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import JsBarcode from "jsbarcode";
 import {
   Barcode,
@@ -27,6 +36,8 @@ import {
   Trash2,
   UploadCloud,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { Button, StatusDot } from "../../components/ui";
 import {
@@ -69,6 +80,7 @@ import {
   transcribeAudio,
   type ProductPackageBarcode,
   type ProductPackageImage,
+  type ProductPackageImageResult,
   type ProductPackagePrintFile,
   type ProductPackageWhatsAppImage,
 } from "../../services/desktopService";
@@ -108,6 +120,7 @@ interface PrintWorkFile {
 
 const IMAGE_ROLE_OPTIONS: ImageRole[] = [
   "portada",
+  "frente",
   "espalda remera",
   "hover",
   "costado",
@@ -275,7 +288,10 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const [lastSavedFolder, setLastSavedFolder] = useState("");
   const [pendingBackup, setPendingBackup] = useState<{ modelCode: string; message: string } | null>(null);
   const [printWorkFiles, setPrintWorkFiles] = useState<PrintWorkFile[]>([]);
+  const [imageBoardZoom, setImageBoardZoom] = useState(0.58);
+  const [boardPanelWeight, setBoardPanelWeight] = useState(72);
 
+  const creatorLeftRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const galleryInput = useRef<HTMLInputElement>(null);
   const printWorkInput = useRef<HTMLInputElement>(null);
@@ -335,6 +351,18 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   );
   const showCreatorActionLabels = settings.creatorActionLabels;
   const productAlreadySaved = knownProductIds.includes(draft.id);
+  const imageBoardStyle = {
+    "--image-board-card-width": `${Math.round(252 * imageBoardZoom)}px`,
+    "--image-board-preview-height": `${Math.round(235 * imageBoardZoom)}px`,
+  } as CSSProperties;
+  const creatorLeftStyle = {
+    "--board-panel-size": `${boardPanelWeight}fr`,
+    "--ai-panel-size": `${100 - boardPanelWeight}fr`,
+  } as CSSProperties;
+  const imageBoardColorChoices = useMemo<ColorCode[]>(
+    () => Array.from(new Set<ColorCode>([...draft.colors, "BLA", "NEG", "GRI"])),
+    [draft.colors],
+  );
 
   useEffect(() => {
     if (lastDraftId.current === draft.id) return;
@@ -495,10 +523,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     patch: Partial<ProductImage>,
     recomputeFilename = true,
   ) => {
+    const currentAutomaticFilename = imageFilename(image.colorCode, image.imageNumber, image.device);
     patchImage(image.id, {
       ...patch,
       finalFilename:
-        patch.finalFilename ?? (recomputeFilename ? filenameForImage(image, patch) : image.finalFilename),
+        patch.finalFilename ??
+        (recomputeFilename && image.finalFilename === currentAutomaticFilename
+          ? filenameForImage(image, patch)
+          : image.finalFilename),
     });
   };
 
@@ -544,6 +576,32 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     const next = currentImages.filter((image) => image.id !== imageId);
     next.splice(Math.max(0, imageNumber - 1), 0, selected);
     replaceImages(normalizeImageOrder(next));
+  };
+
+  const changeImageBoardZoom = (delta: number) => {
+    setImageBoardZoom((current) => Math.min(1.34, Math.max(0.46, Number((current + delta).toFixed(2)))));
+  };
+
+  const resizeCreatorPanels = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const container = creatorLeftRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const update = (clientY: number) => {
+      const relative = clientY - rect.top;
+      const next = Math.round((relative / Math.max(1, rect.height)) * 100);
+      setBoardPanelWeight(Math.min(84, Math.max(48, next)));
+    };
+    const handlePointerMove = (pointerEvent: PointerEvent) => update(pointerEvent.clientY);
+    const stop = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stop);
+      document.body.classList.remove("is-resizing-panels");
+    };
+    document.body.classList.add("is-resizing-panels");
+    update(event.clientY);
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stop, { once: true });
   };
 
   const fileAsDataUrl = (file: File) =>
@@ -679,6 +737,26 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       }),
     );
 
+  const mergePackageImagePaths = (
+    product: ProductDraft,
+    imageResults: ProductPackageImageResult[] | undefined,
+  ): ProductDraft => {
+    if (!imageResults?.length) return product;
+    const pathsById = new Map(imageResults.map((image) => [image.id, image]));
+    return {
+      ...product,
+      images: product.images.map((image) => {
+        const paths = pathsById.get(image.id);
+        if (!paths) return image;
+        return {
+          ...image,
+          originalPath: paths.originalPath,
+          finalPath: paths.finalPath,
+        };
+      }),
+    };
+  };
+
   const buildPackagePrintFiles = () => buildPrintFilePayloads(printWorkFiles);
 
   const buildPackageBarcodes = async (product: ProductDraft): Promise<ProductPackageBarcode[]> =>
@@ -746,16 +824,34 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const handleGalleryImages = async (files: FileList | null) => {
     if (!files?.length) return;
     let added = 0;
+    let skipped = 0;
+    const currentDraft = useProductStore.getState().draft;
+    const existingFileKeys = new Set(
+      Array.from(imageFiles.current.values()).map((file) => `${file.name}|${file.size}|${file.lastModified}`),
+    );
+    const existingNames = new Set(currentDraft.images.map((image) => image.originalName.toLowerCase()));
     for (const file of Array.from(files)) {
       if (file.type.startsWith("image/")) {
+        const fileKey = `${file.name}|${file.size}|${file.lastModified}`;
+        const fileName = file.name.toLowerCase();
+        if (existingFileKeys.has(fileKey) || existingNames.has(fileName)) {
+          skipped += 1;
+          continue;
+        }
         await addProductImage(file);
+        existingFileKeys.add(fileKey);
+        existingNames.add(fileName);
         added += 1;
       }
     }
     if (added > 0) {
-      notify(`${added} imagen${added === 1 ? "" : "es"} cargada${added === 1 ? "" : "s"}.`);
+      notify(
+        `${added} imagen${added === 1 ? "" : "es"} cargada${added === 1 ? "" : "s"}${
+          skipped ? `, ${skipped} repetida${skipped === 1 ? "" : "s"} omitida${skipped === 1 ? "" : "s"}` : ""
+        }.`,
+      );
     } else {
-      notify("No encontre imagenes en esos archivos.");
+      notify(skipped ? "Esas imagenes ya estaban cargadas." : "No encontre imagenes en esos archivos.");
     }
   };
 
@@ -1062,10 +1158,11 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         barcodes: await buildPackageBarcodes(productToSave),
         printFiles: await buildPackagePrintFiles(),
       });
-      const saveResult = await saveProduct(productToSave);
+      const productWithSavedImages = mergePackageImagePaths(productToSave, packageResult.images);
+      const saveResult = await saveProduct(productWithSavedImages);
       await onSaved();
       if (saveResult.backupError) {
-        setPendingBackup({ modelCode: productToSave.modelCode, message: saveResult.backupError });
+        setPendingBackup({ modelCode: productWithSavedImages.modelCode, message: saveResult.backupError });
       } else {
         setPendingBackup(null);
       }
@@ -1316,7 +1413,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       </header>
 
       <div className="creator-layout">
-        <div className="creator-left">
+        <div className="creator-left" ref={creatorLeftRef} style={creatorLeftStyle}>
           <section className="creator-card image-board-card">
             <div className="section-title image-board-title">
               <div>
@@ -1327,6 +1424,25 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 </span>
               </div>
               <div className={`gallery-header-actions ${showCreatorActionLabels ? "" : "is-icon-only"}`}>
+                <span className="image-board-zoom">
+                  <button
+                    type="button"
+                    onClick={() => changeImageBoardZoom(-0.08)}
+                    title="Achicar imagenes"
+                    aria-label="Achicar imagenes"
+                  >
+                    <ZoomOut size={14} />
+                  </button>
+                  <small>{Math.round(imageBoardZoom * 100)}%</small>
+                  <button
+                    type="button"
+                    onClick={() => changeImageBoardZoom(0.08)}
+                    title="Agrandar imagenes"
+                    aria-label="Agrandar imagenes"
+                  >
+                    <ZoomIn size={14} />
+                  </button>
+                </span>
                 <button
                   type="button"
                   onClick={() => setGalleryExpanded(true)}
@@ -1365,6 +1481,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
             <div
               className={`image-board ${sortedImages.length ? "" : "is-empty"}`}
+              style={imageBoardStyle}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
@@ -1372,10 +1489,10 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               }}
             >
               {sortedImages.length ? (
-                <div className="image-board-grid">
+                <div className="image-board-canvas">
                   {sortedImages.map((image) => (
                     <article
-                      className={`image-board-item ${image.imageNumber === 1 ? "is-cover" : ""}`}
+                      className={`image-board-tile ${image.imageNumber === 1 ? "is-cover" : ""}`}
                       key={image.id}
                     >
                       <div className="image-board-preview">
@@ -1387,24 +1504,33 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                           </span>
                         )}
                         <strong>{String(image.imageNumber).padStart(2, "0")}</strong>
-                        {image.imageNumber === 1 && <em>Portada</em>}
+                        <button
+                          type="button"
+                          className={image.imageNumber === 1 ? "image-cover-chip active" : "image-cover-chip"}
+                          onClick={() => setCoverImage(image.id)}
+                          disabled={image.imageNumber === 1}
+                          title={image.imageNumber === 1 ? "Imagen de portada" : "Usar como portada"}
+                        >
+                          <Check size={13} />
+                          {image.imageNumber === 1 ? "Portada" : "Usar"}
+                        </button>
+                        <button
+                          type="button"
+                          className="image-delete-chip"
+                          onClick={() => removeImage(image.id)}
+                          title="Quitar imagen"
+                          aria-label="Quitar imagen"
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
 
                       <div className="image-board-controls">
-                        <button
-                          type="button"
-                          className={image.imageNumber === 1 ? "active" : ""}
-                          onClick={() => setCoverImage(image.id)}
-                          disabled={image.imageNumber === 1}
-                        >
-                          <Check size={13} />
-                          {image.imageNumber === 1 ? "Portada" : "Usar portada"}
-                        </button>
-
                         <label>
-                          <span>Rol</span>
+                          <span>Tipo</span>
                           <select
-                            value={image.role}
+                            value={image.imageNumber === 1 ? "portada" : image.role}
+                            disabled={image.imageNumber === 1}
                             onChange={(event) => {
                               const role = event.target.value as ImageRole;
                               if (role === "portada") setCoverImage(image.id);
@@ -1419,76 +1545,28 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                           </select>
                         </label>
 
-                        <div className="image-board-row">
-                          <label>
-                            <span>Orden</span>
-                            <select
-                              value={image.imageNumber}
-                              onChange={(event) =>
-                                moveImageToNumber(image.id, Number(event.target.value))
-                              }
-                            >
-                              {sortedImages.map((_, index) => (
-                                <option key={index + 1} value={index + 1}>
-                                  {String(index + 1).padStart(2, "0")}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-
-                          <label>
-                            <span>Color</span>
-                            <select
-                              value={image.colorCode}
-                              onChange={(event) =>
+                        <div className="image-color-swatches" aria-label="Color de la imagen">
+                          {Array.from(new Set([image.colorCode, ...imageBoardColorChoices])).map((color) => (
+                            <button
+                              type="button"
+                              key={color}
+                              className={image.colorCode === color ? "active" : ""}
+                              title={COLOR_CATALOG[color].name}
+                              aria-label={COLOR_CATALOG[color].name}
+                              onClick={() =>
                                 updateBoardImage(image, {
-                                  colorCode: event.target.value as ColorCode,
+                                  colorCode: color,
                                 })
                               }
                             >
-                              {(Object.keys(COLOR_CATALOG) as ColorCode[]).map((color) => (
-                                <option key={color} value={color}>
-                                  {color}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-
-                          <label>
-                            <span>Vista</span>
-                            <select
-                              value={image.device}
-                              onChange={(event) =>
-                                updateBoardImage(image, {
-                                  device: event.target.value as ProductImage["device"],
-                                })
-                              }
-                            >
-                              {IMAGE_DEVICE_OPTIONS.map((device) => (
-                                <option key={device} value={device}>
-                                  {device}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
+                              <i style={{ background: COLOR_CATALOG[color].hex }} />
+                            </button>
+                          ))}
                         </div>
 
-                        <label>
-                          <span>Archivo final</span>
-                          <input
-                            value={image.finalFilename}
-                            onChange={(event) =>
-                              updateBoardImage(image, { finalFilename: event.target.value }, false)
-                            }
-                          />
-                        </label>
-
-                        <div className="image-board-footer">
-                          <small title={image.originalName}>{image.originalName}</small>
-                          <button type="button" onClick={() => removeImage(image.id)}>
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                        <small className="image-board-filename" title={image.finalFilename}>
+                          {image.finalFilename}
+                        </small>
                       </div>
                     </article>
                   ))}
@@ -1529,6 +1607,16 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               }}
             />
           </section>
+
+          <button
+            type="button"
+            className="creator-panel-resizer"
+            onPointerDown={resizeCreatorPanels}
+            title="Arrastrar para ajustar imagenes e IA"
+            aria-label="Ajustar alto del tablero y la IA"
+          >
+            <span />
+          </button>
 
           <section className="creator-card conversation-card description-ai-card">
             <div className="creator-card__header">
@@ -2184,6 +2272,25 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                 <p>Ordená, asigná roles, colores y prepará los archivos del producto.</p>
               </div>
               <div>
+                <span className="image-board-zoom image-board-zoom--modal">
+                  <button
+                    type="button"
+                    onClick={() => changeImageBoardZoom(-0.08)}
+                    title="Achicar imagenes"
+                    aria-label="Achicar imagenes"
+                  >
+                    <ZoomOut size={14} />
+                  </button>
+                  <small>{Math.round(imageBoardZoom * 100)}%</small>
+                  <button
+                    type="button"
+                    onClick={() => changeImageBoardZoom(0.08)}
+                    title="Agrandar imagenes"
+                    aria-label="Agrandar imagenes"
+                  >
+                    <ZoomIn size={14} />
+                  </button>
+                </span>
                 <Button
                   variant="primary"
                   onClick={() => galleryInput.current?.click()}
@@ -2209,14 +2316,15 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
             <div
               className="image-manager image-manager--embedded"
+              style={imageBoardStyle}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
                 void handleGalleryImages(event.dataTransfer.files);
               }}
             >
-              {draft.images.length ? (
-                draft.images.map((image) => (
+              {sortedImages.length ? (
+                sortedImages.map((image) => (
                   <article className="managed-image" key={image.id}>
                     <div className="managed-image__preview">
                       {image.previewUrl ? (
@@ -2230,6 +2338,15 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                       <strong>{image.role}</strong>
                       <small>{image.originalName}</small>
                       <code>{image.finalFilename}</code>
+                      <button
+                        type="button"
+                        className={image.imageNumber === 1 ? "managed-cover-button active" : "managed-cover-button"}
+                        onClick={() => setCoverImage(image.id)}
+                        disabled={image.imageNumber === 1}
+                      >
+                        <Check size={13} />
+                        {image.imageNumber === 1 ? "Portada activa" : "Usar como portada"}
+                      </button>
                       <div className="field-row">
                         <label>
                           <span>Número</span>
@@ -2237,20 +2354,30 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                             value={image.imageNumber}
                             onChange={(event) => {
                               const imageNumber = Number(event.target.value);
-                              patchImage(image.id, {
-                                imageNumber,
-                                role: roleForImageNumber(imageNumber),
-                                finalFilename: imageFilename(
-                                  image.colorCode,
-                                  imageNumber,
-                                  image.device,
-                                ),
-                              });
+                              moveImageToNumber(image.id, imageNumber);
                             }}
                           >
-                            {Array.from({ length: 12 }, (_, index) => index + 1).map((number) => (
+                            {sortedImages.map((_, index) => index + 1).map((number) => (
                               <option value={number} key={number}>
                                 {String(number).padStart(2, "0")} - {roleForImageNumber(number)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <span>Rol</span>
+                          <select
+                            value={image.imageNumber === 1 ? "portada" : image.role}
+                            disabled={image.imageNumber === 1}
+                            onChange={(event) => {
+                              const role = event.target.value as ImageRole;
+                              if (role === "portada") setCoverImage(image.id);
+                              else updateBoardImage(image, { role }, false);
+                            }}
+                          >
+                            {IMAGE_ROLE_OPTIONS.map((role) => (
+                              <option value={role} key={role}>
+                                {role}
                               </option>
                             ))}
                           </select>
@@ -2261,14 +2388,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                             value={image.colorCode}
                             onChange={(event) => {
                               const colorCode = event.target.value as ProductImage["colorCode"];
-                              patchImage(image.id, {
-                                colorCode,
-                                finalFilename: imageFilename(
-                                  colorCode,
-                                  image.imageNumber,
-                                  image.device,
-                                ),
-                              });
+                              updateBoardImage(image, { colorCode });
                             }}
                           >
                             {(Object.keys(COLOR_CATALOG) as ColorCode[]).map((color) => (
@@ -2284,20 +2404,22 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                             value={image.device}
                             onChange={(event) => {
                               const device = event.target.value as ProductImage["device"];
-                              patchImage(image.id, {
-                                device,
-                                finalFilename: imageFilename(
-                                  image.colorCode,
-                                  image.imageNumber,
-                                  device,
-                                ),
-                              });
+                              updateBoardImage(image, { device });
                             }}
                           >
                             <option value="desktop">desktop</option>
                             <option value="mobile">mobile</option>
                             <option value="base">base</option>
                           </select>
+                        </label>
+                        <label>
+                          <span>Archivo final</span>
+                          <input
+                            value={image.finalFilename}
+                            onChange={(event) =>
+                              updateBoardImage(image, { finalFilename: event.target.value }, false)
+                            }
+                          />
                         </label>
                       </div>
                       <div className="managed-image__actions">
