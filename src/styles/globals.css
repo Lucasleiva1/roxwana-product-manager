@@ -3866,6 +3866,7 @@ textarea:focus-visible {
   border-radius: 12px;
   color: var(--muted);
   background: rgba(13, 19, 22, 0.6);
+  cursor: pointer;
 }
 
 .large-drop-zone:hover {
@@ -4392,22 +4393,27 @@ textarea:focus-visible {
 }
 
 .settings-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
-  align-items: start;
-}
-
-.settings-grid > .panel,
-.settings-side > .panel {
-  grid-column: 1;
+  display: flex;
+  max-width: 1180px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
 }
 
 .settings-side {
-  display: contents;
+  display: flex;
+  order: 1;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .settings-ai-prompt,
 .settings-ai-tools {
-  grid-column: 2;
+  order: 20;
+}
+
+.settings-side > .panel {
+  order: 1;
 }
 
 .instruction-editor {
@@ -4418,12 +4424,12 @@ textarea:focus-visible {
 }
 
 .settings-ai-prompt .instruction-editor {
-  min-height: 220px;
-  max-height: 340px;
+  min-height: 150px;
+  max-height: 210px;
 }
 
 .settings-ai-tools .model-catalog {
-  max-height: 260px;
+  max-height: 170px;
   overflow: auto;
 }
 
@@ -4713,15 +4719,13 @@ textarea:focus-visible {
     grid-row: auto;
   }
 
-  .settings-side {
-    display: flex;
-  }
-
-  .settings-grid > .panel,
-  .settings-side > .panel,
   .settings-ai-prompt,
   .settings-ai-tools {
-    grid-column: auto;
+    order: 20;
+  }
+
+  .settings-side > .panel {
+    order: 1;
   }
 
   .app-statusbar {
@@ -5653,7 +5657,8 @@ textarea:focus-visible {
   background: transparent;
 }
 
-.section-title button {
+.section-title button,
+.section-title label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -5661,6 +5666,17 @@ textarea:focus-visible {
   color: var(--gold-light);
   background: transparent;
   font-size: 11px;
+  cursor: pointer;
+}
+
+.visually-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .gallery-card {
@@ -5876,6 +5892,7 @@ textarea:focus-visible {
   background:
     linear-gradient(135deg, rgba(217, 168, 102, 0.05), transparent 42%),
     #0a0f12;
+  cursor: pointer;
 }
 
 .image-board-empty strong {

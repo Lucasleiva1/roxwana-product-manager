@@ -55,9 +55,11 @@ import {
 import {
   formatStockQuantity,
   formatStockSummary,
+  generateDescriptions,
   imageFilename,
   makeProductSheet,
   makeWebProductInfo,
+  parsePriceInput,
   roleForImageNumber,
   uid,
   validateProduct,
@@ -500,7 +502,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       try {
         const paths = await persistProductImage(
           currentDraft.modelCode,
-          file.name,
+          numberedOriginalFilename(image),
           image.finalFilename,
           file,
         );
@@ -517,6 +519,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       patch.imageNumber ?? image.imageNumber,
       patch.device ?? image.device,
     );
+
+  const numberedOriginalFilename = (image: Pick<ProductImage, "imageNumber" | "originalName">) =>
+    `${String(image.imageNumber).padStart(2, "0")}-${image.originalName}`;
 
   const updateBoardImage = (
     image: ProductImage,
@@ -723,7 +728,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
         const file = imageFiles.current.get(image.id);
         const payload: ProductPackageImage = {
           id: image.id,
-          originalName: image.originalName,
+          originalName: numberedOriginalFilename(image),
           finalFilename: image.finalFilename,
           approved: image.approved,
           originalPath: image.originalPath,
@@ -821,38 +826,28 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     setAttachments((current) => [...current, ...next]);
   };
 
+  const isGalleryImageFile = (file: File) =>
+    file.type.startsWith("image/") || /\.(avif|gif|jpe?g|png|webp)$/i.test(file.name);
+
   const handleGalleryImages = async (files: FileList | null) => {
     if (!files?.length) return;
     let added = 0;
-    let skipped = 0;
-    const currentDraft = useProductStore.getState().draft;
-    const existingFileKeys = new Set(
-      Array.from(imageFiles.current.values()).map((file) => `${file.name}|${file.size}|${file.lastModified}`),
-    );
-    const existingNames = new Set(currentDraft.images.map((image) => image.originalName.toLowerCase()));
     for (const file of Array.from(files)) {
-      if (file.type.startsWith("image/")) {
-        const fileKey = `${file.name}|${file.size}|${file.lastModified}`;
-        const fileName = file.name.toLowerCase();
-        if (existingFileKeys.has(fileKey) || existingNames.has(fileName)) {
-          skipped += 1;
-          continue;
-        }
+      if (isGalleryImageFile(file)) {
         await addProductImage(file);
-        existingFileKeys.add(fileKey);
-        existingNames.add(fileName);
         added += 1;
       }
     }
     if (added > 0) {
-      notify(
-        `${added} imagen${added === 1 ? "" : "es"} cargada${added === 1 ? "" : "s"}${
-          skipped ? `, ${skipped} repetida${skipped === 1 ? "" : "s"} omitida${skipped === 1 ? "" : "s"}` : ""
-        }.`,
-      );
+      notify(`${added} imagen${added === 1 ? "" : "es"} cargada${added === 1 ? "" : "s"}.`);
     } else {
-      notify(skipped ? "Esas imagenes ya estaban cargadas." : "No encontre imagenes en esos archivos.");
+      notify("No encontre imagenes en esos archivos.");
     }
+  };
+
+  const removeProductImage = (imageId: string) => {
+    imageFiles.current.delete(imageId);
+    removeImage(imageId);
   };
 
   const handlePrintWorkFiles = async (files: FileList | null) => {
@@ -1099,7 +1094,8 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
       patchDraft(result);
       notify("Descripciones regeneradas con IA");
     } catch {
-      notify("Ollama todavía no está listo para generar descripciones.");
+      patchDraft(generateDescriptions(draft, tone));
+      notify("Ollama no respondió; apliqué una descripción comercial local.");
     } finally {
       setActionBusy(null);
     }
@@ -1113,7 +1109,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     setFieldBusy(field);
     try {
       const value = await suggestProductField(field, draft, settings);
-      if (field === "price") patchDraft({ price: Number(String(value).replace(/\D/g, "")) });
+      if (field === "price") patchDraft({ price: parsePriceInput(value) });
       else if (field === "tags") {
         patchDraft({ tags: String(value).split(",").map((item) => item.trim()).filter(Boolean) });
       } else patchDraft({ [field]: value } as Partial<ProductDraft>);
@@ -1452,15 +1448,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                   <Maximize2 size={15} />
                   {showCreatorActionLabels && <span>Administrar</span>}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => galleryInput.current?.click()}
+                <label
+                  htmlFor="product-gallery-input"
                   title="Agregar imagenes"
                   aria-label="Agregar imagenes"
                 >
                   <UploadCloud size={15} />
                   {showCreatorActionLabels && <span>Agregar imagenes</span>}
-                </button>
+                </label>
                 <button
                   type="button"
                   onClick={() => printWorkInput.current?.click()}
@@ -1517,7 +1512,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                         <button
                           type="button"
                           className="image-delete-chip"
-                          onClick={() => removeImage(image.id)}
+                          onClick={() => removeProductImage(image.id)}
                           title="Quitar imagen"
                           aria-label="Quitar imagen"
                         >
@@ -1572,24 +1567,24 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                   ))}
                 </div>
               ) : (
-                <button
-                  type="button"
+                <label
+                  htmlFor="product-gallery-input"
                   className="image-board-empty"
-                  onClick={() => galleryInput.current?.click()}
                 >
                   <UploadCloud size={28} />
                   <strong>Solta aca todas las imagenes del producto</strong>
                   <small>La primera que entre queda como portada. Despues podes cambiarla.</small>
-                </button>
+                </label>
               )}
             </div>
 
             <input
+              id="product-gallery-input"
               ref={galleryInput}
-              hidden
+              className="visually-hidden-input"
               multiple
               type="file"
-              accept="image/*"
+              accept="image/*,.avif,.gif,.jpg,.jpeg,.png,.webp"
               onChange={(event) => {
                 void handleGalleryImages(event.target.files);
                 event.currentTarget.value = "";
@@ -1844,7 +1839,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                       <article key={image.id}>
                         {image.previewUrl ? <img src={image.previewUrl} alt={image.role} /> : null}
                         <span>{String(image.imageNumber).padStart(2, "0")}</span>
-                        <button type="button" onClick={() => removeImage(image.id)}>
+                        <button type="button" onClick={() => removeProductImage(image.id)}>
                           <Trash2 size={13} />
                         </button>
                       </article>
@@ -1973,9 +1968,12 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                     <div className="money-input">
                       <span>$</span>
                       <input
-                        type="number"
-                        value={draft.price || ""}
-                        onChange={(event) => patchDraft({ price: Number(event.target.value) })}
+                        type="text"
+                        inputMode="numeric"
+                        value={draft.price ? new Intl.NumberFormat("es-AR").format(draft.price) : ""}
+                        onChange={(event) =>
+                          patchDraft({ price: parsePriceInput(event.target.value) })
+                        }
                       />
                     </div>
                     <div className="field-shortcuts field-shortcuts--prices" aria-label="Precios rápidos">
@@ -2433,7 +2431,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                           />
                           Aprobada
                         </label>
-                        <Button variant="danger" size="sm" onClick={() => removeImage(image.id)}>
+                        <Button variant="danger" size="sm" onClick={() => removeProductImage(image.id)}>
                           <Trash2 size={14} /> Quitar
                         </Button>
                       </div>
@@ -2441,14 +2439,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                   </article>
                 ))
               ) : (
-                <button
+                <label
+                  htmlFor="product-gallery-input"
                   className="large-drop-zone"
-                  onClick={() => galleryInput.current?.click()}
                 >
                   <ImagePlus size={38} />
                   <strong>Soltá acá las fotos del producto</strong>
                   <span>La primera será portada; después podés ordenar y asignar roles.</span>
-                </button>
+                </label>
               )}
             </div>
 

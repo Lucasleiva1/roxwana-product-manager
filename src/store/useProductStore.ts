@@ -165,7 +165,7 @@ export const useProductStore = create<ProductState>((set, get) => ({
   messages: [welcomeMessage()],
   settings: settingsFromStorage(),
   manualMode: false,
-  selectedTone: "rockera",
+  selectedTone: "comercial",
   folderPath: "",
   setDraft: (draft) => {
     persistDraft(draft);

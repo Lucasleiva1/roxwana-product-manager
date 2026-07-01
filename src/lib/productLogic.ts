@@ -86,6 +86,10 @@ export function slugify(value: string) {
     .replace(/(^-|-$)/g, "");
 }
 
+export function parsePriceInput(value: string | number | null | undefined) {
+  return Number(String(value ?? "").replace(/\D/g, ""));
+}
+
 export function normalizeColor(input: string): ColorCode | undefined {
   const key = input.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
   if (key.toUpperCase() in COLOR_CATALOG) return key.toUpperCase() as ColorCode;
@@ -353,42 +357,76 @@ export function applyBriefToDraft(draft: ProductDraft, brief: ExtractedBrief): P
   };
 }
 
-export function generateDescriptions(draft: ProductDraft, tone: "rockera" | "comercial" | "minimal" = "rockera") {
+function readableList(items: string[]) {
+  const cleanItems = items.map((item) => item.trim()).filter(Boolean);
+  if (cleanItems.length <= 1) return cleanItems[0] ?? "";
+  return `${cleanItems.slice(0, -1).join(", ")} y ${cleanItems[cleanItems.length - 1]}`;
+}
+
+function definedText(value?: string | null) {
+  const clean = String(value ?? "").trim();
+  return clean && clean !== "No definido" && clean !== "no_definido" ? clean : "";
+}
+
+function techniqueText(technique: ProductDraft["technique"]) {
+  const clean = definedText(technique);
+  if (!clean) return "";
+  if (clean === "Sin estampa") return "lisa, sin estampa";
+  return `con técnica ${clean}`;
+}
+
+export function generateDescriptions(draft: ProductDraft, tone: "rockera" | "comercial" | "minimal" = "comercial") {
   const garmentName = draft.garmentType ? GARMENT_TYPES[draft.garmentType] : "Producto";
   const garment = garmentName.toLowerCase();
-  const displayName = draft.name || garmentName;
-  const colorNames = draft.colors.map((code) => COLOR_CATALOG[code].name.toLowerCase()).join(" y ");
-  const material = draft.material && draft.material !== "No definido" ? ` en ${draft.material}` : "";
-  const technique = draft.technique !== "No definido" ? ` con terminación ${draft.technique}` : "";
-  const style = "de identidad urbana";
+  const displayName = definedText(draft.name) || garmentName;
+  const colorNames = draft.colors.map((code) => COLOR_CATALOG[code].name.toLowerCase());
+  const colors = readableList(colorNames);
+  const sizes = readableList([...draft.sizes]);
+  const material = definedText(draft.material);
+  const technique = techniqueText(draft.technique);
+  const collection = definedText(draft.collectionDrop);
+  const gender = definedText(draft.gender);
+  const article = ["REM", "CAM", "MUS", "GOR"].includes(draft.garmentType) ? "una" : "un";
+  const materialPart = material ? ` de ${material}` : "";
+  const colorPart = colors ? ` en ${colors}` : "";
+  const techniquePart = technique ? `, ${technique}` : "";
+  const sizeSentence = sizes ? `Talles disponibles: ${sizes}.` : "";
+  const colorSentence = colors ? `Disponible en ${colors}.` : "";
+  const collectionSentence = collection ? `Parte del drop ${collection}.` : "";
+  const genderSentence = gender ? `Pensada para ${gender}.` : "";
+
   const primaryShortDescription =
     tone === "minimal"
-      ? `${garmentName} ${colorNames} ${style}${technique}.`
-      : `${garmentName} ${colorNames} ${style}${technique}, creada para llevar el pulso ROXWANA.`;
+      ? `${displayName}: ${garment}${materialPart}${colorPart}${techniquePart}, con presencia urbana ROXWANA.`
+      : tone === "rockera"
+        ? `${displayName}: ${garment}${materialPart}${colorPart}${techniquePart}, cómoda y con actitud rock urbana.`
+        : `${displayName}: ${garment}${materialPart}${colorPart}${techniquePart}, fácil de combinar y lista para destacar.`;
   const alternateShortDescription =
     tone === "minimal"
-      ? `${displayName}: ${garment} ${colorNames}${material}, ${style}.`
-      : `${displayName} combina actitud rockera, ${style} y una presencia pensada para destacar.`;
+      ? `${garmentName}${materialPart}${colorPart}${techniquePart}. Diseño limpio, urbano y directo para uso diario.`
+      : tone === "rockera"
+        ? `${displayName} suma identidad ROXWANA con ${garment}${materialPart}${colorPart}, comodidad y carácter.`
+        : `${displayName} combina comodidad, estilo urbano y detalles reales de la ficha para vender mejor.`;
   const primaryLongDescription =
-    tone === "comercial"
-      ? `${displayName} es una ${garment}${material} pensada para acompañarte todos los días. Su estética rock urbana, su calce cómodo y sus terminaciones cuidadas la convierten en una pieza fácil de combinar y difícil de ignorar.`
-      : tone === "minimal"
-        ? `${displayName}. ${garmentName}${material}, ${style}${technique}. Diseño ROXWANA de presencia limpia y carácter urbano.`
-        : `${displayName} nace del lado más crudo de ROXWANA. Una ${garment}${material} ${style}${technique}, con una presencia que no pide permiso. Hecha para looks urbanos, noches largas y volumen alto.`;
+    tone === "minimal"
+      ? `${displayName} es ${article} ${garment}${materialPart}${colorPart}${techniquePart}, con una estética limpia y fácil de usar.\n\n${colorSentence} ${sizeSentence} ${genderSentence} ${collectionSentence}`.trim()
+      : tone === "rockera"
+        ? `${displayName} lleva la identidad ROXWANA a ${article} ${garment}${materialPart}${colorPart}${techniquePart}. Es una pieza cómoda, urbana y con presencia para armar looks con carácter.\n\n${colorSentence} ${sizeSentence} ${genderSentence} ${collectionSentence}`.trim()
+        : `${displayName} es ${article} ${garment}${materialPart}${colorPart}${techniquePart}, pensada para sumar comodidad y estilo urbano sin complicar el look.\n\n${colorSentence} ${sizeSentence} ${genderSentence} ${collectionSentence}`.trim();
   const alternateLongDescription =
-    tone === "comercial"
-      ? `${displayName} lleva la identidad ROXWANA a una ${garment}${material} versátil y cómoda. Su diseño urbano${technique} funciona como protagonista del look y se adapta con facilidad a distintas combinaciones.`
-      : tone === "minimal"
-        ? `${displayName} reúne una silueta ${style}${material}${technique}. Una pieza urbana, directa y fiel al lenguaje visual de ROXWANA.`
-        : `${displayName} cruza calle, volumen y actitud en una ${garment}${material} ${style}${technique}. Una pieza ROXWANA para vestirse con carácter y dejar que el diseño hable primero.`;
+    tone === "minimal"
+      ? `${displayName} funciona como básico urbano de ROXWANA: ${garment}${materialPart}${colorPart}${techniquePart}, directo y fácil de combinar.\n\n${colorSentence} ${sizeSentence} ${genderSentence} ${collectionSentence}`.trim()
+      : tone === "rockera"
+        ? `${displayName} mezcla comodidad y actitud en ${article} ${garment}${materialPart}${colorPart}${techniquePart}. Tiene presencia sin exagerar y acompaña bien looks urbanos de todos los días.\n\n${colorSentence} ${sizeSentence} ${genderSentence} ${collectionSentence}`.trim()
+        : `${displayName} está pensada para venderse como una prenda versátil: ${garment}${materialPart}${colorPart}${techniquePart}, cómoda y clara para el uso diario.\n\n${colorSentence} ${sizeSentence} ${genderSentence} ${collectionSentence}`.trim();
   const useAlternate = draft.shortDescription === primaryShortDescription;
 
   return {
     shortDescription: useAlternate ? alternateShortDescription : primaryShortDescription,
-    longDescription: useAlternate ? alternateLongDescription : primaryLongDescription,
+    longDescription: (useAlternate ? alternateLongDescription : primaryLongDescription).replace(/[ \t]{2,}/g, " "),
     whatsappText: useAlternate
-      ? `Hola, quiero saber qué talles y colores tienen disponibles de ${displayName}.`
-      : `Quiero consultar por ${displayName}. ¿Me pasan disponibilidad de talles y colores?`,
+      ? `Hola, quiero consultar disponibilidad de ${displayName}${colors ? ` en ${colors}` : ""}${sizes ? `, talles ${sizes}` : ""}.`
+      : `Hola, me interesa ${displayName}. ¿Me pasan colores, talles disponibles y forma de compra?`,
   };
 }
 

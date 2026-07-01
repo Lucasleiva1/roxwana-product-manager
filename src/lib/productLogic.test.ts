@@ -8,6 +8,7 @@ import {
   makeModelCode,
   makeProductSheet,
   parseNaturalBrief,
+  parsePriceInput,
   suggestProductName,
   slugify,
   validateProduct,
@@ -57,6 +58,13 @@ describe("lógica de producto ROXWANA", () => {
   it("entiende un precio enviado como respuesta corta", () => {
     expect(parseNaturalBrief("35000").price).toBe(35000);
     expect(parseNaturalBrief("$ 35.000 pesos").price).toBe(35000);
+  });
+
+  it("mantiene exactamente el precio escrito en el formulario", () => {
+    expect(parsePriceInput("18.000")).toBe(18000);
+    expect(parsePriceInput("18.001")).toBe(18001);
+    expect(parsePriceInput("$ 17.999")).toBe(17999);
+    expect(parsePriceInput("")).toBe(0);
   });
 
   it("pregunta primero el precio cuando la descripción básica ya está completa", () => {

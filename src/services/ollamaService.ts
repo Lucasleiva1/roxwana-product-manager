@@ -518,40 +518,81 @@ export async function generateProductDescription(
   tone: string,
   instruction = "",
 ) {
-  const prompt = `${settings.assistantInstructions}
-Redactá para ROXWANA en español rioplatense. Tono: ${tone}.
-${instruction ? `Pedido actual del usuario: ${instruction}` : "Generá una nueva versión de los textos."}
-No inventes materiales ni prestaciones. No menciones ni sugieras prendas oversize.
-Devolvé SOLO JSON:
-{"shortDescription":"...","longDescription":"...","whatsappText":"...","tags":["..."]}
-Datos: ${JSON.stringify({
-    name: draft.name,
-    garment: draft.garmentType,
-    colors: draft.colors,
-    technique: draft.technique,
-    material: draft.material,
+  const defined = (value?: string | null) => {
+    const clean = String(value ?? "").trim();
+    return clean && clean !== "No definido" && clean !== "no_definido" ? clean : "";
+  };
+  const colorNames = draft.colors.map((code) => COLOR_CATALOG[code].name);
+  const imageRoles = draft.images
+    .map((image) => ({
+      number: image.imageNumber,
+      color: COLOR_CATALOG[image.colorCode].name,
+      role: image.role,
+      view: image.device,
+    }))
+    .sort((left, right) => left.number - right.number);
+  const descriptionContext = {
+    name: defined(draft.name),
+    garment: draft.garmentType ? GARMENT_TYPES[draft.garmentType] : "",
+    gender: defined(draft.gender),
+    category: defined(draft.category),
+    colors: colorNames,
+    sizes: draft.sizes,
+    material: defined(draft.material),
+    technique: defined(draft.technique),
+    collectionDrop: defined(draft.collectionDrop),
+    price: draft.price || null,
     tags: draft.tags,
+    imageRoles,
+    variantCount: draft.variants.length,
     currentShortDescription: draft.shortDescription,
     currentLongDescription: draft.longDescription,
     currentWhatsappText: draft.whatsappText,
-  })}`;
+  };
+  const prompt = `${settings.assistantInstructions}
+Objetivo: escribir textos comerciales buenos para una ficha de producto de ROXWANA.
+Idioma: español rioplatense claro. Tono elegido: ${tone}.
+${instruction ? `Pedido actual del usuario: ${instruction}` : "Generá una nueva versión comercial, más vendible y concreta que la actual."}
+
+Reglas obligatorias:
+- Usá los datos cargados de la ficha: prenda, género, categoría, material, técnica, colores, talles, drop, tags, variantes e imágenes.
+- Si hay colores, talles, material o técnica, tienen que aparecer de forma natural en la descripción.
+- No inventes materiales, calce, prestaciones, descuentos, stock, estampas ni beneficios no cargados.
+- No menciones ni sugieras prendas oversize.
+- No uses frases vacías como "calidad premium" si no hay un dato real que lo justifique.
+- No uses emojis, hashtags, títulos, markdown ni comillas.
+- La descripción corta debe ser UNA frase comercial de 90 a 160 caracteres.
+- La descripción larga debe tener 2 párrafos breves, útil para tienda online, entre 350 y 650 caracteres.
+- El texto de WhatsApp debe ser un mensaje corto de consulta/venta listo para enviar.
+- Tags: 4 a 8 etiquetas simples, sin repetir, basadas solo en los datos.
+
+Devolvé SOLO JSON válido con esta forma:
+{"shortDescription":"...","longDescription":"...","whatsappText":"...","tags":["..."]}
+Datos normalizados de la ficha:
+${JSON.stringify(descriptionContext)}`;
   const generated = await ollamaJson<{
     shortDescription: string;
     longDescription: string;
     whatsappText: string;
     tags: string[];
   }>(prompt, settings);
-  const cleanText = (value: string) =>
-    value
+  const cleanText = (value?: string) =>
+    String(value ?? "")
+      .replace(/\*\*/g, "")
+      .replace(/^["'`]+|["'`]+$/g, "")
       .replace(/\b(?:de\s+)?calce\s+oversize\b/gi, "de identidad urbana")
       .replace(/\boversize\b/gi, "")
-      .replace(/\s{2,}/g, " ")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/[ \t]*\n[ \t]*/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
       .trim();
   return {
     shortDescription: cleanText(generated.shortDescription),
     longDescription: cleanText(generated.longDescription),
     whatsappText: cleanText(generated.whatsappText),
-    tags: generated.tags.filter((tag) => !/^over\s*size$/i.test(tag)),
+    tags: (Array.isArray(generated.tags) ? generated.tags : [])
+      .map((tag) => tag.trim())
+      .filter((tag, index, tags) => tag && !/^over\s*size$/i.test(tag) && tags.indexOf(tag) === index),
   };
 }
 
