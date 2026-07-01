@@ -1902,6 +1902,7 @@ export function SettingsView({
       </div>
       <div className="settings-grid">
         <Panel
+          className="settings-ai-prompt"
           title="Instrucciones del asistente"
           eyebrow="Prompt editable"
           icon={<WandSparkles size={18} />}
@@ -1989,7 +1990,7 @@ export function SettingsView({
               </p>
             </div>
           </Panel>
-          <Panel title="Ollama local" eyebrow="IA privada" icon={<Sparkles size={18} />}>
+          <Panel className="settings-ai-tools" title="Ollama local" eyebrow="IA privada" icon={<Sparkles size={18} />}>
             <div className="settings-fields">
               <label>
                 <span>Endpoint</span>

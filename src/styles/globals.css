@@ -4392,7 +4392,22 @@ textarea:focus-visible {
 }
 
 .settings-grid {
-  grid-template-columns: 1.35fr 0.8fr;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  align-items: start;
+}
+
+.settings-grid > .panel,
+.settings-side > .panel {
+  grid-column: 1;
+}
+
+.settings-side {
+  display: contents;
+}
+
+.settings-ai-prompt,
+.settings-ai-tools {
+  grid-column: 2;
 }
 
 .instruction-editor {
@@ -4400,6 +4415,16 @@ textarea:focus-visible {
   resize: vertical;
   padding: 14px;
   line-height: 1.7;
+}
+
+.settings-ai-prompt .instruction-editor {
+  min-height: 220px;
+  max-height: 340px;
+}
+
+.settings-ai-tools .model-catalog {
+  max-height: 260px;
+  overflow: auto;
 }
 
 .settings-note {
@@ -4686,6 +4711,17 @@ textarea:focus-visible {
 
   .backup-page-grid > .panel:first-child {
     grid-row: auto;
+  }
+
+  .settings-side {
+    display: flex;
+  }
+
+  .settings-grid > .panel,
+  .settings-side > .panel,
+  .settings-ai-prompt,
+  .settings-ai-tools {
+    grid-column: auto;
   }
 
   .app-statusbar {
@@ -6200,10 +6236,11 @@ textarea:focus-visible {
 
 .image-color-swatches i {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: 14px;
+  height: 14px;
   border-radius: 4px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(0, 0, 0, 0.22);
 }
 
 .image-board-filename {

@@ -1559,7 +1559,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                                 })
                               }
                             >
-                              <i style={{ background: COLOR_CATALOG[color].hex }} />
+                              <i style={{ backgroundColor: COLOR_CATALOG[color].hex }} />
                             </button>
                           ))}
                         </div>

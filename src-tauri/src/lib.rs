@@ -551,7 +551,7 @@ fn ensure_cover_image_path(
         &format!("{model_code}-portada.{extension}"),
         "portada.webp",
     ));
-    fs::copy(source, &target).map_err(|error| {
+    copy_file_if_different(source, &target).map_err(|error| {
         format!(
             "No pude preparar la imagen de portada '{}': {}",
             source.to_string_lossy(),
@@ -559,6 +559,23 @@ fn ensure_cover_image_path(
         )
     })?;
     Ok(target)
+}
+
+fn paths_are_same_file(source: &Path, destination: &Path) -> bool {
+    if !source.exists() || !destination.exists() {
+        return false;
+    }
+    match (fs::canonicalize(source), fs::canonicalize(destination)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn copy_file_if_different(source: &Path, destination: &Path) -> Result<(), String> {
+    if paths_are_same_file(source, destination) {
+        return Ok(());
+    }
+    fs::copy(source, destination).map(|_| ()).map_err(|error| error.to_string())
 }
 
 fn decode_data_url(value: &str) -> Result<Vec<u8>, String> {
@@ -1756,7 +1773,7 @@ fn save_product_package(
         } else if let Some(source_path) = image.original_path {
             let source = PathBuf::from(source_path);
             if source.exists() {
-                fs::copy(source, &original_path).map_err(|error| error.to_string())?;
+                copy_file_if_different(&source, &original_path)?;
             }
         }
 
@@ -1766,8 +1783,15 @@ fn save_product_package(
         } else if let Some(source_path) = image.final_path {
             let source = PathBuf::from(source_path);
             if source.exists() {
-                fs::copy(source, &webp_path).map_err(|error| error.to_string())?;
+                copy_file_if_different(&source, &webp_path)?;
             }
+        }
+
+        if !webp_path.exists() {
+            return Err(format!(
+                "No pude encontrar la imagen final '{}' para guardar el producto.",
+                image.final_filename
+            ));
         }
 
         if webp_path.exists() {
@@ -1779,11 +1803,11 @@ fn save_product_package(
         }
 
         if image.approved && webp_path.exists() {
-            fs::copy(
+            let approved_path = folder.join("imagenes/aprobadas").join(&final_name);
+            let _ = copy_file_if_different(
                 &webp_path,
-                folder.join("imagenes/aprobadas").join(&final_name),
-            )
-            .map_err(|error| error.to_string())?;
+                &approved_path,
+            );
         }
     }
 
