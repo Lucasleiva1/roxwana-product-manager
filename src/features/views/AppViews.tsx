@@ -40,7 +40,6 @@ import type { AppView } from "../../app/App";
 import { Button, EmptyState, Panel, StatCard, StatusDot, Toggle } from "../../components/ui";
 import {
   COLOR_CATALOG,
-  GARMENT_TYPES,
   type AppSettings,
   type ProductImage,
   type ProductDraft,
@@ -69,6 +68,9 @@ import {
   formatStockSummary,
   hasDefinedStock,
   hasSellableVariants,
+  makeWebProductInfo,
+  normalizeStudioCategory,
+  STUDIO_CATEGORY_OPTIONS,
   totalDefinedStock,
 } from "../../lib/productLogic";
 import {
@@ -97,6 +99,11 @@ function formatDate(value: string) {
     month: "short",
     year: "numeric",
   }).format(new Date(value));
+}
+
+function categoryLabel(product: Pick<ProductDraft, "category" | "garmentType">) {
+  const category = normalizeStudioCategory(product.category, product.garmentType);
+  return STUDIO_CATEGORY_OPTIONS.find((option) => option.value === category)?.label ?? "Sin categoria";
 }
 
 async function settleWithTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -453,12 +460,8 @@ function ProductDetailModal({
                   {product.modelCode || "Sin codigo"}
                 </span>
                 <span>
-                  <small>Prenda</small>
-                  {product.garmentType ? GARMENT_TYPES[product.garmentType] : "Sin definir"}
-                </span>
-                <span>
-                  <small>Categoria</small>
-                  {product.category || "Sin categoria"}
+                  <small>Categoría</small>
+                  {categoryLabel(product)}
                 </span>
                 <span>
                   <small>Genero</small>
@@ -1132,6 +1135,10 @@ export function ProductsView({
     window.setTimeout(() => setCopiedMessage((current) => (current === `${label} copiado` ? "" : current)), 1800);
   };
 
+  const copyProductForWeb = (product: ProductDraft) => {
+    copyProductValue("Info web", makeWebProductInfo(product));
+  };
+
   const handleCoverDragStart = (
     event: DragEvent<HTMLImageElement>,
     product: ProductDraft,
@@ -1187,6 +1194,9 @@ export function ProductsView({
     <div className="product-actions">
       <Button size="sm" onClick={() => setSelectedProduct(product)}>
         <Eye size={14} /> Ver
+      </Button>
+      <Button size="sm" onClick={() => copyProductForWeb(product)}>
+        <Copy size={14} /> Copiar para web
       </Button>
       <Button
         size="sm"
@@ -1343,7 +1353,7 @@ export function ProductsView({
             <article className="product-card" key={product.id}>
               {productCover(product)}
               <div className="product-card__body">
-                <span className="eyebrow">{product.category}</span>
+                <span className="eyebrow">{categoryLabel(product)}</span>
                 <div className="product-card__title">
                   <h3>{product.name}</h3>
                   {inlineCopyButton("Nombre", product.name)}
@@ -1645,7 +1655,7 @@ export function HistoryView({
       if (filter === "draft" && product.status !== "draft") return false;
       if (filter === "made_to_order" && (hasDefinedStock(product) || !hasSellableVariants(product))) return false;
       if (filter === "active" && (product.status === "draft" || !hasSellableVariants(product))) return false;
-      const haystack = `${product.name} ${product.modelCode} ${product.status} ${product.category}`.toLowerCase();
+      const haystack = `${product.name} ${product.modelCode} ${product.status} ${categoryLabel(product)}`.toLowerCase();
       return haystack.includes(query.toLowerCase());
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

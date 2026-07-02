@@ -5,6 +5,7 @@ import {
   SIZE_CODES,
   type ColorCode,
   type ExtractedBrief,
+  type GarmentCode,
   type ImageRole,
   type ProductDraft,
   type ProductImage,
@@ -58,6 +59,46 @@ const COLOR_ALIASES: Record<string, ColorCode> = {
 };
 
 const SIZE_ORDER = new Map(SIZE_CODES.map((size, index) => [size, index]));
+
+export const STUDIO_CATEGORY_OPTIONS = [
+  { label: "Remeras", value: "remeras", garmentType: "REM" },
+  { label: "Buzos", value: "buzos", garmentType: "BZO" },
+  { label: "Gorras", value: "gorras", garmentType: "GOR" },
+  { label: "Camperas", value: "camperas", garmentType: "CAM" },
+] as const satisfies readonly { label: string; value: string; garmentType: GarmentCode }[];
+
+const STUDIO_CATEGORY_ALIASES: Record<string, (typeof STUDIO_CATEGORY_OPTIONS)[number]["value"]> = {
+  rem: "remeras",
+  remera: "remeras",
+  remeras: "remeras",
+  buz: "buzos",
+  bzo: "buzos",
+  buzo: "buzos",
+  buzos: "buzos",
+  gor: "gorras",
+  gorra: "gorras",
+  gorras: "gorras",
+  cam: "camperas",
+  campera: "camperas",
+  camperas: "camperas",
+};
+
+function normalizedLookupKey(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+
+export function normalizeStudioCategory(category?: string | null, garmentType?: string | null) {
+  const categoryKey = normalizedLookupKey(category ?? "");
+  if (categoryKey in STUDIO_CATEGORY_ALIASES) return STUDIO_CATEGORY_ALIASES[categoryKey];
+  const garmentKey = normalizedLookupKey(garmentType ?? "");
+  if (garmentKey in STUDIO_CATEGORY_ALIASES) return STUDIO_CATEGORY_ALIASES[garmentKey];
+  return "";
+}
+
+export function garmentTypeForStudioCategory(category?: string | null): GarmentCode | undefined {
+  const normalizedCategory = normalizeStudioCategory(category);
+  return STUDIO_CATEGORY_OPTIONS.find((option) => option.value === normalizedCategory)?.garmentType;
+}
 
 export const productDraftSchema = z.object({
   modelCode: z.string().regex(/^RXW-[A-Z0-9]+-[A-Z0-9]+$/, "Código de modelo inválido"),
@@ -194,7 +235,11 @@ export function parseNaturalBrief(input: string): ExtractedBrief {
   if (explicitName?.[1]) extracted.name = explicitName[1].trim();
 
   const categoryMatch = input.match(/categor[ií]a\s*(?:es|:)?\s*([^,.\n]+)/i);
-  if (categoryMatch?.[1]) extracted.category = categoryMatch[1].trim();
+  if (categoryMatch?.[1]) {
+    const category = normalizeStudioCategory(categoryMatch[1]);
+    extracted.category = category || categoryMatch[1].trim();
+    if (category && !extracted.garmentType) extracted.garmentType = garmentTypeForStudioCategory(category);
+  }
 
   const collectionMatch = input.match(/(?:colecci[oó]n|drop)\s*(?:es|:)?\s*([^,.\n]+)/i);
   if (collectionMatch?.[1]) extracted.collectionDrop = collectionMatch[1].trim();
@@ -305,7 +350,10 @@ export function imageFilename(colorCode: ColorCode, imageNumber: number, device:
 }
 
 export function applyBriefToDraft(draft: ProductDraft, brief: ExtractedBrief): ProductDraft {
-  const garmentType = brief.garmentType ?? draft.garmentType;
+  const categoryGarmentType = garmentTypeForStudioCategory(brief.category);
+  const garmentType = brief.garmentType ?? (categoryGarmentType || draft.garmentType);
+  const category =
+    normalizeStudioCategory(brief.category, garmentType) || normalizeStudioCategory(draft.category, garmentType);
   const modelPrefix = (brief.modelPrefix ?? draft.modelPrefix) || (garmentType ? "RCK" : "");
   const modelNumber = draft.modelNumber;
   const modelRaw = makeModelRaw(modelPrefix, modelNumber);
@@ -328,7 +376,7 @@ export function applyBriefToDraft(draft: ProductDraft, brief: ExtractedBrief): P
   return {
     ...draft,
     garmentType,
-    category: brief.category ?? draft.category,
+    category,
     gender: brief.gender ?? draft.gender,
     colors,
     sizes,
@@ -438,9 +486,11 @@ export function validateProduct(
   const issues: ValidationIssue[] = [];
   const result = productDraftSchema.safeParse(draft);
   if (!result.success) {
-    result.error.issues.forEach((issue) =>
-      issues.push({ field: issue.path.join("."), message: issue.message, severity: "error" }),
-    );
+    result.error.issues.forEach((issue) => {
+      const field = issue.path.join(".");
+      if (field === "garmentType") return;
+      issues.push({ field, message: issue.message, severity: "error" });
+    });
   }
   if (!draft.modelCode.startsWith("RXW-")) {
     issues.push({ field: "modelCode", message: "El código debe comenzar con RXW.", severity: "error" });
@@ -468,7 +518,9 @@ export function validateProduct(
     localSkus.add(variant.sku);
   });
   if (!draft.name.trim()) issues.push({ field: "name", message: "Falta el nombre visible.", severity: "error" });
-  if (!draft.garmentType) issues.push({ field: "garmentType", message: "Falta el tipo de prenda.", severity: "error" });
+  if (!normalizeStudioCategory(draft.category, draft.garmentType)) {
+    issues.push({ field: "category", message: "La categoria debe ser remeras, buzos, gorras o camperas.", severity: "error" });
+  }
   if (!draft.gender) issues.push({ field: "gender", message: "Falta el género.", severity: "error" });
   if (!draft.technique) issues.push({ field: "technique", message: "Falta la técnica.", severity: "error" });
   if (!draft.colors.length) issues.push({ field: "colors", message: "Falta seleccionar un color.", severity: "error" });
@@ -484,6 +536,7 @@ export function validateProduct(
 }
 
 export function makeProductSheet(draft: ProductDraft) {
+  const studioCategory = normalizeStudioCategory(draft.category, draft.garmentType);
   const indentLong = (draft.longDescription || "").split("\n").map((line) => `  ${line}`).join("\n");
   const variants = draft.variants
     .map((variant) => `  ${variant.sku} | ${variant.sizeCode} | ${variant.colorCode} | ${variant.stock > 0 ? variant.stock : "indefinido"}`)
@@ -498,12 +551,11 @@ export function makeProductSheet(draft: ProductDraft) {
     `codigo: ${draft.modelCode}`,
     `nombre: ${draft.name}`,
     `slug: ${draft.slug}`,
-    `prenda: ${draft.garmentType}`,
     `genero: ${draft.gender}`,
     `estado: ${draft.status}`,
     `precio: ${draft.price || ""}`,
     `precio_anterior: ${draft.previousPrice ?? ""}`,
-    `categoria: ${draft.category}`,
+    `categoria: ${studioCategory}`,
     `drop: ${draft.collectionDrop}`,
     `destacado: ${draft.highlighted}`,
     `orden: ${draft.sortOrder}`,
@@ -521,6 +573,7 @@ export function makeProductSheet(draft: ProductDraft) {
 }
 
 export function makeWebProductInfo(draft: ProductDraft) {
+  const studioCategory = normalizeStudioCategory(draft.category, draft.garmentType);
   const colorNames = draft.colors.map((code) => COLOR_CATALOG[code].name).join(", ") || "Sin colores";
   const sizes = draft.sizes.join(", ") || "Sin talles";
   const variants = draft.variants.length
@@ -542,7 +595,7 @@ export function makeWebProductInfo(draft: ProductDraft) {
     `Precio: ${draft.price || ""}`,
     `Precio anterior: ${draft.previousPrice ?? ""}`,
     `Estado: ${draft.status}`,
-    `Categoria: ${draft.category || ""}`,
+    `categoria: ${studioCategory}`,
     `Genero: ${draft.gender || ""}`,
     `Tecnica: ${draft.technique || ""}`,
     `Material: ${draft.material || ""}`,

@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { garmentTypeForStudioCategory, normalizeStudioCategory } from "../lib/productLogic";
 import type { AppSettings, ProductDraft, ProductImage } from "../types/product";
 
 declare global {
@@ -104,8 +105,11 @@ async function invokeSaveProductPackage(payload: ProductPackagePayload) {
 }
 
 function normalizeProductDraft(product: ProductDraft): ProductDraft {
+  const category = normalizeStudioCategory(product.category, product.garmentType);
   return {
     ...product,
+    category,
+    garmentType: product.garmentType || garmentTypeForStudioCategory(category) || "",
     publication: {
       whatsapp: Boolean(product.publication?.whatsapp),
       web: Boolean(product.publication?.web),

@@ -3,9 +3,11 @@ import {
   applyBriefToDraft,
   generateDescriptions,
   generateVariants,
+  garmentTypeForStudioCategory,
   makeEmptyDraft,
   makeModelCode,
   makeModelRaw,
+  normalizeStudioCategory,
   slugify,
   uid,
 } from "../lib/productLogic";
@@ -85,11 +87,17 @@ function clearPersistedDraft() {
   }
 }
 
+function normalizeDraftCategory(draft: ProductDraft): ProductDraft {
+  const category = normalizeStudioCategory(draft.category, draft.garmentType);
+  const garmentType = draft.garmentType || garmentTypeForStudioCategory(category) || "";
+  return { ...draft, category, garmentType };
+}
+
 function draftFromStorage() {
   try {
     const stored = JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) || "null") as ProductDraft | null;
     if (!stored || !hasDraftContent(stored)) return null;
-    return {
+    return normalizeDraftCategory({
       ...makeEmptyDraft(),
       ...stored,
       publication: {
@@ -101,7 +109,7 @@ function draftFromStorage() {
       sizes: Array.isArray(stored.sizes) ? stored.sizes : [],
       variants: Array.isArray(stored.variants) ? stored.variants : [],
       images: Array.isArray(stored.images) ? stored.images : [],
-    };
+    });
   } catch {
     return null;
   }
@@ -168,12 +176,20 @@ export const useProductStore = create<ProductState>((set, get) => ({
   selectedTone: "comercial",
   folderPath: "",
   setDraft: (draft) => {
-    persistDraft(draft);
-    set({ draft });
+    const normalized = normalizeDraftCategory(draft);
+    persistDraft(normalized);
+    set({ draft: normalized });
   },
   patchDraft: (patch) =>
     set((state) => {
       const next = { ...state.draft, ...patch, updatedAt: new Date().toISOString() };
+      if (patch.category !== undefined && patch.garmentType === undefined) {
+        const garmentType = garmentTypeForStudioCategory(patch.category);
+        if (garmentType) next.garmentType = garmentType;
+      }
+      if (patch.category !== undefined || patch.garmentType !== undefined) {
+        next.category = normalizeStudioCategory(next.category, next.garmentType);
+      }
       next.tags = next.tags.filter((tag) => !/^over\s*size$/i.test(tag));
       if (patch.name !== undefined && patch.slug === undefined) next.slug = slugify(patch.name);
       if (

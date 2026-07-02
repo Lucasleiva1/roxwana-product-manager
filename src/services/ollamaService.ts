@@ -10,7 +10,7 @@ import {
   type ExtractedBrief,
   type ProductDraft,
 } from "../types/product";
-import { parseNaturalBrief } from "../lib/productLogic";
+import { garmentTypeForStudioCategory, normalizeStudioCategory, parseNaturalBrief } from "../lib/productLogic";
 import { isTauri } from "./desktopService";
 
 export interface OllamaStatus {
@@ -118,7 +118,7 @@ function compactProduct(product: ProductDraft) {
     name: product.name,
     slug: product.slug,
     gender: product.gender,
-    category: product.category,
+    category: normalizeStudioCategory(product.category, product.garmentType),
     collectionDrop: product.collectionDrop,
     price: product.price,
     previousPrice: product.previousPrice,
@@ -185,8 +185,8 @@ Respondé SOLO JSON válido con esta forma:
 {
   "reply": "respuesta natural y útil para mostrar en el chat",
   "updates": {
-    "garmentType": "REM|BZO|CAM|MUS|PAN|GOR|ACC",
-    "category": "string",
+    "garmentType": "REM|BZO|CAM|GOR",
+    "category": "remeras|buzos|gorras|camperas",
     "gender": "hombre|mujer|unisex|no_definido",
     "colors": ["NEG"],
     "sizes": ["S","M"],
@@ -236,7 +236,14 @@ function sanitizeBrief(value: unknown): ExtractedBrief {
   if (typeof input.garmentType === "string" && input.garmentType in GARMENT_TYPES) {
     result.garmentType = input.garmentType as ExtractedBrief["garmentType"];
   }
-  if (typeof input.category === "string") result.category = input.category.trim();
+  const category = normalizeStudioCategory(
+    typeof input.category === "string" ? input.category : "",
+    typeof input.garmentType === "string" ? input.garmentType : "",
+  );
+  if (category) {
+    result.category = category;
+    if (!result.garmentType) result.garmentType = garmentTypeForStudioCategory(category);
+  }
   if (
     typeof input.gender === "string" &&
     ["hombre", "mujer", "unisex", "no_definido"].includes(input.gender)
@@ -349,8 +356,8 @@ las etiquetas ni las descripciones.
 
 Respondé SOLO JSON válido con esta forma:
 {
-  "garmentType": "REM|BZO|CAM|MUS|PAN|GOR|ACC",
-  "category": "string",
+  "garmentType": "REM|BZO|CAM|GOR",
+  "category": "remeras|buzos|gorras|camperas",
   "gender": "hombre|mujer|unisex|no_definido",
   "colors": ["NEG"],
   "sizes": ["S","M"],
@@ -376,7 +383,7 @@ Omití las propiedades desconocidas.
 Ficha actual:
 ${currentDraft ? JSON.stringify({
     garmentType: currentDraft.garmentType,
-    category: currentDraft.category,
+    category: normalizeStudioCategory(currentDraft.category, currentDraft.garmentType),
     gender: currentDraft.gender,
     colors: currentDraft.colors,
     sizes: currentDraft.sizes,
@@ -535,7 +542,7 @@ export async function generateProductDescription(
     name: defined(draft.name),
     garment: draft.garmentType ? GARMENT_TYPES[draft.garmentType] : "",
     gender: defined(draft.gender),
-    category: defined(draft.category),
+    category: normalizeStudioCategory(draft.category, draft.garmentType),
     colors: colorNames,
     sizes: draft.sizes,
     material: defined(draft.material),
@@ -631,10 +638,10 @@ Producto: ${JSON.stringify(draft)}`;
 export function askMissingQuestions(draft: ProductDraft) {
   return [
     {
-      field: "garmentType",
-      question: "¿Qué tipo de producto es?",
+      field: "category",
+      question: "¿Qué categoría es: remeras, buzos, gorras o camperas?",
       required: true,
-      missing: !draft.garmentType,
+      missing: !normalizeStudioCategory(draft.category, draft.garmentType),
     },
     {
       field: "colors",
@@ -662,7 +669,7 @@ export function askMissingQuestions(draft: ProductDraft) {
     },
     {
       field: "gender",
-      question: "¿La prenda es para hombre, mujer o unisex?",
+      question: "¿Es para hombre, mujer o unisex?",
       required: false,
       missing: !draft.gender || draft.gender === "no_definido",
     },

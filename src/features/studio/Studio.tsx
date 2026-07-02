@@ -42,7 +42,6 @@ import {
 import { Button, StatusDot } from "../../components/ui";
 import {
   COLOR_CATALOG,
-  GARMENT_TYPES,
   SIZE_CODES,
   TECHNIQUES,
   type ColorCode,
@@ -59,8 +58,10 @@ import {
   imageFilename,
   makeProductSheet,
   makeWebProductInfo,
+  normalizeStudioCategory,
   parsePriceInput,
   roleForImageNumber,
+  STUDIO_CATEGORY_OPTIONS,
   uid,
   validateProduct,
 } from "../../lib/productLogic";
@@ -312,6 +313,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
 
   const sheet = useMemo(() => makeProductSheet(draft), [draft]);
   const webInfo = useMemo(() => makeWebProductInfo(draft), [draft]);
+  const studioCategory = normalizeStudioCategory(draft.category, draft.garmentType);
+  const studioCategoryLabel =
+    STUDIO_CATEGORY_OPTIONS.find((option) => option.value === studioCategory)?.label ?? "Sin categoria";
   const issues = useMemo(
     () => validateProduct(draft, knownSkus, knownModelCodes),
     [draft, knownSkus, knownModelCodes],
@@ -333,7 +337,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
   const selectedBarcodeVariant =
     draft.variants.find((variant) => variant.sku === selectedBarcodeSku) ?? selectedVariant;
   const completionFields = [
-    Boolean(draft.garmentType),
+    Boolean(studioCategory),
     Boolean(draft.name.trim()),
     Boolean(draft.gender),
     Boolean(draft.technique),
@@ -1110,6 +1114,9 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     try {
       const value = await suggestProductField(field, draft, settings);
       if (field === "price") patchDraft({ price: parsePriceInput(value) });
+      else if (field === "category") {
+        handleStudioCategoryChange(normalizeStudioCategory(value, draft.garmentType));
+      }
       else if (field === "tags") {
         patchDraft({ tags: String(value).split(",").map((item) => item.trim()).filter(Boolean) });
       } else patchDraft({ [field]: value } as Partial<ProductDraft>);
@@ -1119,6 +1126,14 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
     } finally {
       setFieldBusy(null);
     }
+  };
+
+  const handleStudioCategoryChange = (category: string) => {
+    const option = STUDIO_CATEGORY_OPTIONS.find((item) => item.value === category);
+    patchDraft({
+      category,
+      garmentType: option?.garmentType ?? "",
+    });
   };
 
   const handleSave = async () => {
@@ -1911,17 +1926,15 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               </FieldShell>
 
               <div className="creator-field-row">
-                <FieldShell label="Tipo de prenda" onSuggest={suggestField} busy={fieldBusy}>
+                <FieldShell label="Categoría" field="category" onSuggest={suggestField} busy={fieldBusy}>
                   <select
-                    value={draft.garmentType}
-                    onChange={(event) =>
-                      patchDraft({ garmentType: event.target.value as ProductDraft["garmentType"] })
-                    }
+                    value={studioCategory}
+                    onChange={(event) => handleStudioCategoryChange(event.target.value)}
                   >
                     <option value="">Seleccionar</option>
-                    {Object.entries(GARMENT_TYPES).map(([code, name]) => (
-                      <option value={code} key={code}>
-                        {name}
+                    {STUDIO_CATEGORY_OPTIONS.map((option) => (
+                      <option value={option.value} key={option.value}>
+                        {option.label}
                       </option>
                     ))}
                   </select>
@@ -1957,12 +1970,6 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
               </div>
 
               <div className="creator-field-row">
-                <FieldShell label="Categoría" field="category" onSuggest={suggestField} busy={fieldBusy}>
-                  <input
-                    value={draft.category}
-                    onChange={(event) => patchDraft({ category: event.target.value })}
-                  />
-                </FieldShell>
                 <FieldShell label="Precio" field="price" onSuggest={suggestField} busy={fieldBusy}>
                   <div className="field-with-shortcuts">
                     <div className="money-input">
@@ -1990,20 +1997,19 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                     </div>
                   </div>
                 </FieldShell>
+                <FieldShell label="Material" field="material" onSuggest={suggestField} busy={fieldBusy}>
+                  <input
+                    value={draft.material}
+                    list="material-options"
+                    onChange={(event) => patchDraft({ material: event.target.value })}
+                  />
+                  <datalist id="material-options">
+                    {MATERIAL_OPTIONS.map((material) => (
+                      <option value={material} key={material} />
+                    ))}
+                  </datalist>
+                </FieldShell>
               </div>
-
-              <FieldShell label="Material" field="material" onSuggest={suggestField} busy={fieldBusy}>
-                <input
-                  value={draft.material}
-                  list="material-options"
-                  onChange={(event) => patchDraft({ material: event.target.value })}
-                />
-                <datalist id="material-options">
-                  {MATERIAL_OPTIONS.map((material) => (
-                    <option value={material} key={material} />
-                  ))}
-                </datalist>
-              </FieldShell>
 
               <div className="creator-field-row">
                 <FieldShell label="Técnica" onSuggest={suggestField} busy={fieldBusy}>
@@ -2565,7 +2571,7 @@ function Studio({ onSaved, onNavigate, appMode }: StudioProps) {
                     <ImagePlus size={36} />
                   )}
                 </div>
-                <span>{draft.garmentType ? GARMENT_TYPES[draft.garmentType] : "Sin tipo"}</span>
+                <span>{studioCategoryLabel}</span>
                 <h3>{draft.name}</h3>
                 <strong>{formatPrice(draft.price)}</strong>
                 <p>{draft.shortDescription || "Todavía no hay una descripción corta."}</p>

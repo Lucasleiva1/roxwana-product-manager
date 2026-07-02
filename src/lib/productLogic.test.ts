@@ -7,6 +7,7 @@ import {
   applyBriefToDraft,
   makeModelCode,
   makeProductSheet,
+  normalizeStudioCategory,
   parseNaturalBrief,
   parsePriceInput,
   suggestProductName,
@@ -31,6 +32,7 @@ describe("lógica de producto ROXWANA", () => {
       "Remera negra urbana skull, DTF, talles S M L XL, 2 por talle, precio 29900",
     );
     expect(brief.garmentType).toBe("REM");
+    expect(brief.category).toBe("remeras");
     expect(brief.colors).toEqual(["NEG"]);
     expect(brief.sizes).toEqual(["S", "M", "L", "XL"]);
     expect(brief.stockPerVariant).toBe(2);
@@ -126,6 +128,34 @@ describe("lógica de producto ROXWANA", () => {
     });
     const sheet = makeProductSheet(draft);
     expect(sheet).toContain("RXW-REM-RCK001-NEG-M | M | NEG | 2");
+  });
+
+  it("normaliza categorias compatibles con Product Studio", () => {
+    expect(normalizeStudioCategory("REM")).toBe("remeras");
+    expect(normalizeStudioCategory("Remera")).toBe("remeras");
+    expect(normalizeStudioCategory("Remeras")).toBe("remeras");
+    expect(normalizeStudioCategory("BUZ")).toBe("buzos");
+    expect(normalizeStudioCategory("Buzo")).toBe("buzos");
+    expect(normalizeStudioCategory("Buzos")).toBe("buzos");
+    expect(normalizeStudioCategory("GOR")).toBe("gorras");
+    expect(normalizeStudioCategory("Gorra")).toBe("gorras");
+    expect(normalizeStudioCategory("Gorras")).toBe("gorras");
+    expect(normalizeStudioCategory("CAM")).toBe("camperas");
+    expect(normalizeStudioCategory("Campera")).toBe("camperas");
+    expect(normalizeStudioCategory("Camperas")).toBe("camperas");
+  });
+
+  it("exporta categoria para Studio sin campos viejos de prenda", () => {
+    const draft = applyBriefToDraft(draftWithUniqueModel(), {
+      garmentType: "REM",
+      colors: ["NEG"],
+      sizes: ["M"],
+    });
+    const sheet = makeProductSheet({ ...draft, category: "Remera" });
+    expect(sheet).toContain("categoria: remeras");
+    expect(sheet).not.toMatch(/^prenda:/m);
+    expect(sheet).not.toMatch(/^tipo_prenda:/m);
+    expect(sheet).not.toMatch(/^tipo de prenda:/m);
   });
 
   it("trata stock cero como indefinido y no como sin stock", () => {
